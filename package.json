@@ -4,7 +4,10 @@
     "description": "Advanced Solana trading bot with Telegram interface",
     "main": "src/index.js",
     "scripts": {
-        "start": "node src/index.js",
+        "start": "node src/start.js",
+        "start:detached": "node src/index.js",
+        "stop": "node src/stopbot.js",
+        "reset": "node src/reset-and-start.js",
         "dev": "nodemon src/index.js",
         "lint": "eslint src/",
         "test": "echo \"No tests specified\" && exit 0"

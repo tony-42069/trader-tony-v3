@@ -12,10 +12,11 @@ const commands = require('./commands');
 const logger = require('./utils/logger');
 const solanaClient = require('./utils/solana');
 
-// Create directories if they don't exist
+// BOOTSTRAP: Create data directories if they don't exist
 ['logs', 'data'].forEach(dir => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir);
+    logger.info(`Created directory: ${dir}`);
   }
 });
 
@@ -92,34 +93,24 @@ const adminMiddleware = (ctx, next) => {
 // Apply admin middleware to all messages
 bot.use(adminMiddleware);
 
-// Handle /start command
+// BOOTSTRAP: Set up all command handlers
+// Core commands
 bot.command('start', commands.handleStart);
-
-// Handle /help command
 bot.command('help', commands.handleHelp);
-
-// Handle /balance command
 bot.command('balance', commands.handleBalance);
 
-// Handle /snipe command
+// Trading commands
 bot.command('snipe', commands.handleSnipe);
-
-// Handle /buy command
 bot.command('buy', commands.handleBuy);
-
-// Handle /fund command
-bot.command('fund', commands.handleFund);
-
-// Handle /wallet command
-bot.command('wallet', commands.handleWallet);
-
-// Handle /refresh command
-bot.command('refresh', commands.handleRefresh);
-
-// Handle /positions command
 bot.command('positions', commands.handlePositions);
 
-// Handle button clicks
+// Wallet commands
+bot.command('fund', commands.handleFund);
+bot.command('wallet', commands.handleWallet);
+bot.command('refresh', commands.handleRefresh);
+
+// BOOTSTRAP: Set up button click handlers
+// Main menu buttons
 bot.action('snipe', commands.handleSnipe);
 bot.action('buy', commands.handleBuy);
 bot.action('fund', commands.handleFund);
@@ -132,18 +123,15 @@ bot.action('dcaOrders', commands.handleDCAOrders);
 bot.action('referFriends', commands.handleReferFriends);
 bot.action('refresh', commands.handleRefresh);
 
-// Handle slippage selection
+// BOOTSTRAP: Set up special action handlers
+// Trading setup actions
 bot.action(/^slippage_([0-9.]+)$/, (ctx) => commands.handleSlippageSelection(ctx, ctx.match[0]));
-
-// Handle stop-loss/take-profit setup
 bot.action(/^sl_tp_([0-9]+)_([0-9]+)$/, (ctx) => commands.handleStopLossTakeProfit(ctx, ctx.match[0]));
 bot.action('skip_sl_tp', (ctx) => commands.handleStopLossTakeProfit(ctx, 'skip_sl_tp'));
-
-// Handle force buy for high risk tokens
 bot.action(/^force_buy_(.+)_([0-9.]+)_([0-9.]+)$/, (ctx) => commands.handleForceBuy(ctx, ctx.match[0]));
 bot.action('cancel_snipe', commands.handleCancelSnipe);
 
-// Handle token address inputs (for buying)
+// BOOTSTRAP: Handle text input messages
 bot.on(message('text'), async (ctx) => {
   const text = ctx.message.text;
   
@@ -164,10 +152,14 @@ bot.on(message('text'), async (ctx) => {
   ctx.reply('I don\'t understand this command. Type /help to see available commands.');
 });
 
-// Error handling
+// BOOTSTRAP: Global error handling with enhanced logging
 bot.catch((err, ctx) => {
   logger.error(`Bot error: ${err.message}`);
-  ctx.reply('An error occurred while processing your request. Please try again later.');
+  logger.error(`Error stack: ${err.stack}`);
+  logger.error(`Context: ${JSON.stringify(ctx.update || {})}`);
+  
+  // Provide a friendly error message to the user
+  ctx.reply('❌ An error occurred while processing your request. Please try again later.\n\nIf this persists, use /start to reset the bot.');
 });
 
 // Register bot commands with Telegram to make them appear in the menu
@@ -190,27 +182,42 @@ async function registerBotCommands() {
   }
 }
 
-// Start the bot
+// BOOTSTRAP: Start the bot with enhanced error handling
 (async () => {
   try {
+    logger.info('Starting TraderTony v3 bot...');
+    
     // Initialize Solana client
     await solanaClient.init();
+    logger.info('Solana client initialized successfully');
     
     // Register commands with Telegram
     await registerBotCommands();
     
-    // Launch the bot
+    // Launch the bot with improved configuration
     await bot.launch({
-      dropPendingUpdates: true
+      dropPendingUpdates: true,
+      allowedUpdates: ['message', 'callback_query']
     });
+    
     logger.info('TraderTony v3 bot started successfully');
-    console.log('TraderTony v3 bot is running...');
+    console.log('🚀 TraderTony v3 bot is running with REAL functionality...');
+    console.log(`🔌 Demo mode: ${solanaClient.demoMode ? 'Enabled' : 'Disabled'}`);
+    console.log(`💼 Wallet: ${solanaClient.getWalletAddress()}`);
     
     // Enable graceful stop
-    process.once('SIGINT', () => bot.stop('SIGINT'));
-    process.once('SIGTERM', () => bot.stop('SIGTERM'));
+    process.once('SIGINT', () => {
+      logger.info('Received SIGINT signal, stopping bot...');
+      bot.stop('SIGINT');
+    });
+    
+    process.once('SIGTERM', () => {
+      logger.info('Received SIGTERM signal, stopping bot...');
+      bot.stop('SIGTERM');
+    });
   } catch (error) {
     logger.error(`Failed to start bot: ${error.message}`);
-    console.error('Failed to start bot:', error);
+    logger.error(`Error stack: ${error.stack}`);
+    console.error('❌ Failed to start bot:', error.message);
   }
 })();
