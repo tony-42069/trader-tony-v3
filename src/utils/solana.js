@@ -2,11 +2,14 @@
 const { Connection, PublicKey, Keypair, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const bs58 = require('bs58');
 const logger = require('./logger');
+const WalletManager = require('./wallet');
+const TransactionUtility = require('./transactions');
 
 class SolanaClient {
   constructor() {
     this.connection = null;
-    this.wallet = null;
+    this.walletManager = null;
+    this.transactionUtility = null;
     this.initialized = false;
     this.demoMode = false;
     this.demoWalletAddress = null;
@@ -21,25 +24,34 @@ class SolanaClient {
       const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
       this.connection = new Connection(rpcUrl, 'confirmed');
       
+      // Initialize wallet manager
+      this.walletManager = new WalletManager(this.connection);
+      
       // Check if demo mode is enabled
       if (process.env.DEMO_MODE === 'true') {
         // Use demo wallet with predefined address
-        this.wallet = Keypair.generate(); // Generate a temporary keypair
         this.demoMode = true;
         this.demoWalletAddress = process.env.DEMO_WALLET_ADDRESS || '2PS57B26Sh5Xa22dPSEt9bRgP5FhNsoyFvGUV8t5X232';
         logger.info(`Demo mode enabled with wallet address: ${this.demoWalletAddress}`);
       }
       // Set up wallet if private key is available
       else if (process.env.SOLANA_PRIVATE_KEY) {
-        const privateKey = bs58.decode(process.env.SOLANA_PRIVATE_KEY);
-        this.wallet = Keypair.fromSecretKey(privateKey);
-        logger.info('Wallet initialized with private key');
+        try {
+          const publicKey = this.walletManager.loadWalletFromPrivateKey(process.env.SOLANA_PRIVATE_KEY);
+          logger.info(`Wallet initialized with address: ${publicKey}`);
+        } catch (error) {
+          logger.error(`Failed to load wallet from private key: ${error.message}`);
+          this.demoMode = true;
+          logger.info('Falling back to demo mode due to wallet initialization failure');
+        }
       } else {
-        // Create a demo wallet for testing
-        this.wallet = Keypair.generate();
+        // No private key provided, use demo mode
         this.demoMode = true;
-        logger.info('Demo wallet generated (no private key provided)');
+        logger.info('No private key provided, using demo mode');
       }
+      
+      // Initialize transaction utility
+      this.transactionUtility = new TransactionUtility(this);
       
       this.initialized = true;
       logger.info('Solana client initialized successfully');
@@ -65,12 +77,62 @@ class SolanaClient {
         return 4.2; // Mock balance for demo
       }
       
-      const balance = await this.connection.getBalance(this.wallet.publicKey);
-      return balance / LAMPORTS_PER_SOL;
+      // Get real balance from wallet manager
+      return await this.walletManager.getBalance();
     } catch (error) {
       logger.error(`Error getting balance: ${error.message}`);
       throw error;
     }
+  }
+
+  /**
+   * Get token balances for the wallet
+   * @returns {Promise<Array>} Array of token balances
+   */
+  async getTokenBalances() {
+    if (!this.initialized) {
+      await this.init();
+    }
+    
+    try {
+      // If in demo mode, return mock token balances
+      if (this.demoMode) {
+        return [
+          {
+            mint: 'So11111111111111111111111111111111111111112',
+            balance: 4.2,
+            decimals: 9,
+            symbol: 'SOL',
+            name: 'Solana'
+          },
+          {
+            mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+            balance: 100,
+            decimals: 6,
+            symbol: 'USDC',
+            name: 'USD Coin'
+          }
+        ];
+      }
+      
+      // Get real token balances from wallet manager
+      return await this.walletManager.getTokenBalances();
+    } catch (error) {
+      logger.error(`Error getting token balances: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Get the wallet address
+   * @returns {string} Wallet address
+   */
+  getWalletAddress() {
+    if (this.demoMode) {
+      return this.demoWalletAddress;
+    }
+    
+    return this.walletManager.getPublicKey();
   }
 
   /**
@@ -85,7 +147,7 @@ class SolanaClient {
     
     try {
       // If in demo mode or testing, return mock token info
-      if (process.env.NODE_ENV === 'development' || !this.wallet) {
+      if (this.demoMode) {
         return {
           symbol: 'DEMO',
           name: 'Demo Token',
@@ -178,6 +240,55 @@ class SolanaClient {
       logger.error(`Error simulating buy: ${error.message}`);
       throw error;
     }
+  }
+
+  /**
+   * Buy a token with SOL
+   * @param {string} tokenAddress - Token address to buy
+   * @param {number} amountSol - Amount of SOL to spend
+   * @param {number} slippage - Slippage percentage
+   * @returns {Promise<Object>} Transaction result
+   */
+  async buyToken(tokenAddress, amountSol, slippage) {
+    if (!this.initialized) {
+      await this.init();
+    }
+    
+    return await this.transactionUtility.buyToken(tokenAddress, amountSol, slippage);
+  }
+  
+  /**
+   * Sell a token for SOL
+   * @param {string} tokenAddress - Token address to sell
+   * @param {number} tokenAmount - Amount of token to sell
+   * @param {number} slippage - Slippage percentage
+   * @returns {Promise<Object>} Transaction result
+   */
+  async sellToken(tokenAddress, tokenAmount, slippage) {
+    if (!this.initialized) {
+      await this.init();
+    }
+    
+    return await this.transactionUtility.sellToken(tokenAddress, tokenAmount, slippage);
+  }
+  
+  /**
+   * Set up stop-loss and take-profit for a token
+   * @param {string} tokenAddress - Token address
+   * @param {number} stopLossPercentage - Stop loss percentage
+   * @param {number} takeProfitPercentage - Take profit percentage
+   * @returns {Promise<Object>} Order setup result
+   */
+  async setupStopLossTakeProfit(tokenAddress, stopLossPercentage, takeProfitPercentage) {
+    if (!this.initialized) {
+      await this.init();
+    }
+    
+    return await this.transactionUtility.setupStopLossTakeProfit(
+      tokenAddress,
+      stopLossPercentage,
+      takeProfitPercentage
+    );
   }
 }
 

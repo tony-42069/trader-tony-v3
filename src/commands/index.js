@@ -160,15 +160,33 @@ module.exports = {
       const { token } = ctx.session.snipe;
       ctx.session.snipe.amount = amount;
       
+      // Get the current wallet balance
+      let balance = 0;
+      try {
+        balance = await solanaClient.getBalance();
+      } catch (error) {
+        logger.warn(`Could not fetch wallet balance: ${error.message}`);
+      }
+      
+      // Check if the amount is greater than the balance
+      if (amount > balance) {
+        ctx.reply(
+          `⚠️ Warning: The amount ${amount} SOL is greater than your current balance (${balance.toFixed(2)} SOL).\n\n` +
+          `Please enter a smaller amount or fund your wallet first.`,
+          keyboards.mainKeyboard
+        );
+        return;
+      }
+      
       await ctx.reply(
         `Preparing to buy with ${amount} SOL.\n` +
         `Token: ${token}\n\n` +
-        `Select slippage:`,
+        `Select slippage tolerance:`,
         keyboards.slippageKeyboard
       );
     } catch (error) {
       logger.error(`Error in handleAmountInput: ${error.message}`);
-      ctx.reply('Error processing amount. Please try again.');
+      ctx.reply('Error processing amount. Please try again.', keyboards.mainKeyboard);
     }
   },
   
@@ -238,18 +256,30 @@ module.exports = {
     try {
       await ctx.answerCbQuery();
       
-      // Try to get real balance, fall back to mock if it fails
+      // Try to get real balance and tokens
       try {
         ctx.session.wallet.balance = await solanaClient.getBalance();
+        // Get token balances if not in demo mode
+        if (!solanaClient.demoMode) {
+          ctx.session.wallet.tokens = await solanaClient.getTokenBalances();
+        }
       } catch (error) {
-        logger.warn(`Could not fetch real balance: ${error.message}`);
+        logger.warn(`Could not fetch wallet data: ${error.message}`);
+      }
+      
+      // Build token list display
+      let tokenDisplay = 'No tokens found';
+      if (ctx.session.wallet.tokens && ctx.session.wallet.tokens.length > 0) {
+        tokenDisplay = ctx.session.wallet.tokens.map(token => 
+          `${token.symbol || 'Unknown'}: ${token.balance} (${token.mint.substring(0, 8)}...)`
+        ).join('\n');
       }
       
       await ctx.reply(
         `👛 Wallet Information\n\n` +
-        `Address: ${ctx.session.wallet.address}\n` +
+        `Address: ${solanaClient.getWalletAddress()}\n` +
         `Balance: ${ctx.session.wallet.balance} SOL\n\n` +
-        `Tokens: No tokens found`,
+        `Tokens:\n${tokenDisplay}`,
         keyboards.mainKeyboard
       );
     } catch (error) {
@@ -341,6 +371,138 @@ module.exports = {
     } catch (error) {
       logger.error(`Error in handleRefresh: ${error.message}`);
       ctx.reply('Error refreshing data. Please try again.');
+    }
+  },
+  
+  /**
+   * Handle slippage selection for token buying
+   * @param {Object} ctx - Telegram context
+   * @param {string} data - Callback data (slippage_X)
+   */
+  handleSlippageSelection: async (ctx, data) => {
+    try {
+      const slippage = parseFloat(data.split('_')[1]);
+      const { token, amount } = ctx.session.snipe;
+      
+      await ctx.answerCbQuery(`Selected slippage: ${slippage}%`);
+      
+      // Send status message
+      const statusMsg = await ctx.reply(`Buying token ${token} with ${amount} SOL (slippage: ${slippage}%)...`);
+      
+      // Execute the buy
+      const result = await solanaClient.buyToken(token, amount, slippage);
+      
+      if (result.success) {
+        await ctx.telegram.editMessageText(
+          ctx.chat.id, 
+          statusMsg.message_id,
+          null,
+          `✅ Purchase successful!\n\n` +
+          `Token: ${token}\n` +
+          `Amount spent: ${amount} SOL\n` +
+          `Tokens received: ~${result.tokenAmount}\n` +
+          `Transaction: ${result.transactionHash}\n\n` +
+          `Would you like to set up stop-loss/take-profit?`,
+          keyboards.stopLossTakeProfitKeyboard
+        );
+        
+        // Store the token in session for SL/TP setup
+        ctx.session.lastBuyToken = token;
+      } else {
+        await ctx.telegram.editMessageText(
+          ctx.chat.id, 
+          statusMsg.message_id,
+          null,
+          `❌ Purchase failed!\n\n` +
+          `Token: ${token}\n` +
+          `Error: ${result.error || 'Unknown error'}\n\n` +
+          `Try again or choose a different token.`,
+          keyboards.mainKeyboard
+        );
+      }
+      
+      // Reset snipe data
+      ctx.session.snipe = {
+        token: null,
+        amount: null
+      };
+    } catch (error) {
+      logger.error(`Error in handleSlippageSelection: ${error.message}`);
+      ctx.reply('Error processing purchase. Please try again.', keyboards.mainKeyboard);
+      
+      // Reset snipe data
+      ctx.session.snipe = {
+        token: null,
+        amount: null
+      };
+    }
+  },
+  
+  /**
+   * Handle stop-loss/take-profit setup
+   * @param {Object} ctx - Telegram context
+   * @param {string} data - Callback data (sl_tp_X_Y)
+   */
+  handleStopLossTakeProfit: async (ctx, data) => {
+    try {
+      if (data === 'skip_sl_tp') {
+        await ctx.answerCbQuery('Skipped SL/TP setup');
+        await ctx.reply('No stop-loss/take-profit was set. You can manage your positions in the Wallet section.', keyboards.mainKeyboard);
+        return;
+      }
+      
+      const [sl, tp] = data.split('_').slice(2).map(Number);
+      const token = ctx.session.lastBuyToken;
+      
+      if (!token) {
+        await ctx.answerCbQuery('No recent token purchase found');
+        await ctx.reply('Unable to set up stop-loss/take-profit: No recent token purchase found.', keyboards.mainKeyboard);
+        return;
+      }
+      
+      await ctx.answerCbQuery(`Setting SL: ${sl}%, TP: ${tp}%`);
+      
+      // Send status message
+      const statusMsg = await ctx.reply(`Setting up stop-loss at -${sl}% and take-profit at +${tp}% for ${token}...`);
+      
+      // Set up SL/TP
+      const result = await solanaClient.setupStopLossTakeProfit(token, sl, tp);
+      
+      if (result.success) {
+        await ctx.telegram.editMessageText(
+          ctx.chat.id, 
+          statusMsg.message_id,
+          null,
+          `✅ Stop-loss/take-profit set!\n\n` +
+          `Token: ${token}\n` +
+          `Stop-loss: -${sl}%\n` +
+          `Take-profit: +${tp}%\n` +
+          `Order ID: ${result.orderId}`,
+          keyboards.mainKeyboard
+        );
+        
+        // Add to active orders
+        ctx.session.activeOrders.push({
+          id: result.orderId,
+          token: token,
+          stopLoss: sl,
+          takeProfit: tp,
+          createdAt: Date.now()
+        });
+      } else {
+        await ctx.telegram.editMessageText(
+          ctx.chat.id, 
+          statusMsg.message_id,
+          null,
+          `❌ Failed to set stop-loss/take-profit!\n\n` +
+          `Token: ${token}\n` +
+          `Error: ${result.error || 'Unknown error'}`,
+          keyboards.mainKeyboard
+        );
+      }
+    } catch (error) {
+      logger.error(`Error in handleStopLossTakeProfit: ${error.message}`);
+      ctx.reply('Error setting up stop-loss/take-profit. Please try again.', keyboards.mainKeyboard);
     }
   }
 };

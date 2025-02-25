@@ -26,11 +26,12 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 bot.use(session());
 
 // Initialize session data for new users
-bot.use((ctx, next) => {
+bot.use(async (ctx, next) => {
   if (!ctx.session) {
+    // Initialize default session structure
     ctx.session = {
       wallet: {
-        address: process.env.DEMO_WALLET_ADDRESS || '2PS57B26Sh5Xa22dPSEt9bRgP5FhNsoyFvGUV8t5X232',
+        address: solanaClient.getWalletAddress() || process.env.DEMO_WALLET_ADDRESS || '2PS57B26Sh5Xa22dPSEt9bRgP5FhNsoyFvGUV8t5X232',
         balance: 0,
         tokens: []
       },
@@ -46,6 +47,20 @@ bot.use((ctx, next) => {
         amount: null
       }
     };
+    
+    // Try to fetch initial wallet data
+    try {
+      // Only if Solana client is initialized
+      if (solanaClient.initialized) {
+        ctx.session.wallet.balance = await solanaClient.getBalance();
+        // Get token balances if not in demo mode
+        if (!solanaClient.demoMode) {
+          ctx.session.wallet.tokens = await solanaClient.getTokenBalances();
+        }
+      }
+    } catch (error) {
+      logger.warn(`Could not fetch initial wallet data: ${error.message}`);
+    }
   }
   return next();
 });
@@ -81,6 +96,13 @@ bot.action('settings', commands.handleSettings);
 bot.action('dcaOrders', commands.handleDCAOrders);
 bot.action('referFriends', commands.handleReferFriends);
 bot.action('refresh', commands.handleRefresh);
+
+// Handle slippage selection
+bot.action(/^slippage_([0-9.]+)$/, (ctx) => commands.handleSlippageSelection(ctx, ctx.match[0]));
+
+// Handle stop-loss/take-profit setup
+bot.action(/^sl_tp_([0-9]+)_([0-9]+)$/, (ctx) => commands.handleStopLossTakeProfit(ctx, ctx.match[0]));
+bot.action('skip_sl_tp', (ctx) => commands.handleStopLossTakeProfit(ctx, 'skip_sl_tp'));
 
 // Handle token address inputs (for buying)
 bot.on(message('text'), async (ctx) => {

@@ -149,9 +149,29 @@ const backToMainKeyboard = {
   }
 };
 
+// Stop-loss and take-profit keyboard
+const stopLossTakeProfitKeyboard = {
+  reply_markup: {
+    inline_keyboard: [
+      [
+        { text: 'SL: 10% / TP: 20%', callback_data: 'sl_tp_10_20' },
+        { text: 'SL: 15% / TP: 30%', callback_data: 'sl_tp_15_30' }
+      ],
+      [
+        { text: 'SL: 20% / TP: 40%', callback_data: 'sl_tp_20_40' },
+        { text: 'SL: 25% / TP: 50%', callback_data: 'sl_tp_25_50' }
+      ],
+      [
+        { text: 'Skip for now', callback_data: 'skip_sl_tp' }
+      ]
+    ]
+  }
+};
+
 module.exports = {
   mainKeyboard,
   slippageKeyboard,
+  stopLossTakeProfitKeyboard,
   fundKeyboard,
   walletKeyboard,
   settingsKeyboard,
