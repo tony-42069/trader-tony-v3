@@ -6,22 +6,23 @@ const mainKeyboard = {
   reply_markup: {
     inline_keyboard: [
       [
-        { text: '💰 Buy', callback_data: 'buy' },
-        { text: '💵 Fund', callback_data: 'fund' }
+        { text: '🚀 Snipe', callback_data: 'snipe' },
+        { text: '💰 Buy', callback_data: 'buy' }
       ],
       [
-        { text: '📊 Monitor', callback_data: 'monitor' },
-        { text: '🎯 Limit Orders', callback_data: 'limitOrders' }
+        { text: '💵 Fund', callback_data: 'fund' },
+        { text: '📊 Monitor', callback_data: 'monitor' }
       ],
       [
-        { text: '👛 Wallet', callback_data: 'wallet' },
-        { text: '⚙️ Settings', callback_data: 'settings' }
+        { text: '🎯 Limit Orders', callback_data: 'limitOrders' },
+        { text: '👛 Wallet', callback_data: 'wallet' }
       ],
       [
-        { text: '📋 DCA Orders', callback_data: 'dcaOrders' },
-        { text: '🤝 Refer Friends', callback_data: 'referFriends' }
+        { text: '⚙️ Settings', callback_data: 'settings' },
+        { text: '📋 DCA Orders', callback_data: 'dcaOrders' }
       ],
       [
+        { text: '🤝 Refer Friends', callback_data: 'referFriends' },
         { text: '🔄 Refresh', callback_data: 'refresh' }
       ]
     ]

@@ -117,6 +117,7 @@ bot.command('wallet', commands.handleWallet);
 bot.command('refresh', commands.handleRefresh);
 
 // Handle button clicks
+bot.action('snipe', commands.handleSnipe);
 bot.action('buy', commands.handleBuy);
 bot.action('fund', commands.handleFund);
 bot.action('monitor', commands.handleMonitor);
@@ -165,11 +166,33 @@ bot.catch((err, ctx) => {
   ctx.reply('An error occurred while processing your request. Please try again later.');
 });
 
+// Register bot commands with Telegram to make them appear in the menu
+async function registerBotCommands() {
+  try {
+    await bot.telegram.setMyCommands([
+      { command: 'start', description: 'Start or restart the bot' },
+      { command: 'help', description: 'Show this help message' },
+      { command: 'balance', description: 'Show your wallet balance' },
+      { command: 'snipe', description: 'Snipe a token' },
+      { command: 'buy', description: 'Enter a token to buy' },
+      { command: 'fund', description: 'View wallet funding options' },
+      { command: 'wallet', description: 'View wallet information' },
+      { command: 'refresh', description: 'Update wallet balance' }
+    ]);
+    logger.info('Bot commands registered with Telegram');
+  } catch (error) {
+    logger.error(`Failed to register bot commands: ${error.message}`);
+  }
+}
+
 // Start the bot
 (async () => {
   try {
     // Initialize Solana client
     await solanaClient.init();
+    
+    // Register commands with Telegram
+    await registerBotCommands();
     
     // Launch the bot
     await bot.launch({
