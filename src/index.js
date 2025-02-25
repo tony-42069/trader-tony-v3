@@ -67,11 +67,26 @@ bot.use(async (ctx, next) => {
 
 // Admin authentication middleware
 const adminMiddleware = (ctx, next) => {
+  // Get admin IDs from environment variable
   const adminIds = (process.env.ADMIN_TELEGRAM_IDS || '').split(',').map(id => Number(id.trim()));
-  if (adminIds.includes(ctx.from.id)) {
-    return next();
+  
+  // Check if this is a private chat from an admin (for sensitive operations)
+  const isAdmin = adminIds.includes(ctx.from.id);
+  ctx.state.isAdmin = isAdmin; // Store admin status in context state
+
+  // For sensitive commands that should be admin-only
+  const adminOnlyCommands = []; // Add sensitive commands here if needed
+  
+  // If it's an admin-only command, check if user is admin
+  if (ctx.message && ctx.message.text && adminOnlyCommands.some(cmd => 
+      ctx.message.text.startsWith('/' + cmd))) {
+    if (!isAdmin) {
+      return ctx.reply('🚫 This command is restricted to bot administrators only.');
+    }
   }
-  return ctx.reply('🚫 Unauthorized: This bot is currently in private mode.');
+
+  // Allow all users to access basic functionality
+  return next();
 };
 
 // Apply admin middleware to all messages
@@ -88,6 +103,18 @@ bot.command('balance', commands.handleBalance);
 
 // Handle /snipe command
 bot.command('snipe', commands.handleSnipe);
+
+// Handle /buy command
+bot.command('buy', commands.handleBuy);
+
+// Handle /fund command
+bot.command('fund', commands.handleFund);
+
+// Handle /wallet command
+bot.command('wallet', commands.handleWallet);
+
+// Handle /refresh command
+bot.command('refresh', commands.handleRefresh);
 
 // Handle button clicks
 bot.action('buy', commands.handleBuy);

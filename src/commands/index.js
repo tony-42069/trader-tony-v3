@@ -77,8 +77,13 @@ module.exports = {
       `TraderTony v3 Help:\n\n` +
       `• /start - Start or restart the bot\n` +
       `• /help - Show this help message\n` +
-      `• /balance - Show your wallet balance\n\n` +
-      `Use the buttons below for trading functions:`
+      `• /balance - Show your wallet balance\n` +
+      `• /snipe - Snipe a token\n` +
+      `• /buy - Enter a token to buy\n` +
+      `• /fund - View wallet funding options\n` +
+      `• /wallet - View wallet information\n` +
+      `• /refresh - Update wallet balance\n\n` +
+      `Use the buttons below for additional trading functions:`
     );
   },
   
@@ -104,12 +109,26 @@ module.exports = {
   },
   
   /**
-   * Handle the Buy button
+   * Handle the Buy button or /buy command
    * @param {Object} ctx - Telegram context
    */
   handleBuy: async (ctx) => {
     try {
-      await ctx.answerCbQuery();
+      // Check if this is a callback query (button click) and answer it
+      if (ctx.callbackQuery) {
+        await ctx.answerCbQuery();
+      }
+      
+      // If there's a parameter with the command (like /buy ADDRESS)
+      if (ctx.message && ctx.message.text && ctx.message.text.startsWith('/buy')) {
+        const parts = ctx.message.text.split(' ');
+        if (parts.length > 1) {
+          // Address provided with command, handle it directly
+          return exports.handleTokenInput(ctx, parts[1]);
+        }
+      }
+      
+      // Otherwise just ask for the token address
       await ctx.reply(
         'Enter the token address you want to buy:',
         { reply_markup: { force_reply: true } }
