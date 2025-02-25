@@ -127,26 +127,44 @@ module.exports = {
    */
   handleTokenInput: async (ctx, tokenAddress) => {
     try {
-      // For demo, pretend to validate the token
+      // Send initial message
       await ctx.reply(`Analyzing token: ${tokenAddress}...`);
       
-      // Simulate token validation (would actually verify contract in production)
-      setTimeout(async () => {
-        // Save token to session
-        ctx.session.snipe = {
-          token: tokenAddress,
-          amount: null
-        };
-        
-        // Ask for amount
-        await ctx.reply(
-          `Token validated! How much SOL would you like to spend?`,
-          { reply_markup: { force_reply: true } }
-        );
-      }, 2000);
+      // Validate and analyze the token
+      const riskAnalysis = await solanaClient.analyzeTokenRisk(tokenAddress);
+      
+      // Save token to session regardless of risk level
+      ctx.session.snipe = {
+        token: tokenAddress,
+        amount: null,
+        riskAnalysis: riskAnalysis
+      };
+      
+      let message = '';
+      
+      // Format risk level message based on risk
+      if (riskAnalysis.riskLevel <= 30) {
+        message = `✅ Low Risk Token (${riskAnalysis.riskLevel}%)\n`;
+      } else if (riskAnalysis.riskLevel <= 60) {
+        message = `⚠️ Medium Risk Token (${riskAnalysis.riskLevel}%)\n`;
+      } else {
+        message = `🚨 HIGH RISK TOKEN (${riskAnalysis.riskLevel}%)\n`;
+      }
+      
+      // Add warnings if any
+      if (riskAnalysis.warnings && riskAnalysis.warnings.length > 0) {
+        message += `\nWarnings:\n• ${riskAnalysis.warnings.join('\n• ')}\n`;
+      }
+      
+      // Add additional info
+      message += `\nToken: ${tokenAddress}\n\n`;
+      message += `How much SOL would you like to spend?`;
+      
+      // Ask for amount
+      await ctx.reply(message, { reply_markup: { force_reply: true } });
     } catch (error) {
       logger.error(`Error in handleTokenInput: ${error.message}`);
-      ctx.reply('Error validating token. Please try again with a valid token address.');
+      ctx.reply('Error validating token. Please try again with a valid token address.', keyboards.mainKeyboard);
     }
   },
   
@@ -386,11 +404,21 @@ module.exports = {
       
       await ctx.answerCbQuery(`Selected slippage: ${slippage}%`);
       
+      // If risk level is high (>70), use the handleTokenSnipe function instead
+      // which will show additional warnings
+      if (ctx.session.snipe.riskAnalysis && ctx.session.snipe.riskAnalysis.riskLevel > 70) {
+        return await exports.handleTokenSnipe(ctx, token, amount, slippage);
+      }
+      
       // Send status message
       const statusMsg = await ctx.reply(`Buying token ${token} with ${amount} SOL (slippage: ${slippage}%)...`);
       
-      // Execute the buy
-      const result = await solanaClient.buyToken(token, amount, slippage);
+      // Execute the snipe instead of regular buy
+      const result = await solanaClient.snipeToken(token, amount, {
+        slippage,
+        stopLoss: ctx.session.settings.stopLoss,
+        takeProfit: ctx.session.settings.takeProfit
+      });
       
       if (result.success) {
         await ctx.telegram.editMessageText(
@@ -401,7 +429,7 @@ module.exports = {
           `Token: ${token}\n` +
           `Amount spent: ${amount} SOL\n` +
           `Tokens received: ~${result.tokenAmount}\n` +
-          `Transaction: ${result.transactionHash}\n\n` +
+          `Transaction: ${result.signature}\n\n` +
           `Would you like to set up stop-loss/take-profit?`,
           keyboards.stopLossTakeProfitKeyboard
         );
@@ -424,7 +452,8 @@ module.exports = {
       // Reset snipe data
       ctx.session.snipe = {
         token: null,
-        amount: null
+        amount: null,
+        riskAnalysis: null
       };
     } catch (error) {
       logger.error(`Error in handleSlippageSelection: ${error.message}`);
@@ -433,7 +462,8 @@ module.exports = {
       // Reset snipe data
       ctx.session.snipe = {
         token: null,
-        amount: null
+        amount: null,
+        riskAnalysis: null
       };
     }
   },
@@ -503,6 +533,200 @@ module.exports = {
     } catch (error) {
       logger.error(`Error in handleStopLossTakeProfit: ${error.message}`);
       ctx.reply('Error setting up stop-loss/take-profit. Please try again.', keyboards.mainKeyboard);
+    }
+  },
+  
+  /**
+   * Handle token sniping
+   * @param {Object} ctx - Telegram context
+   * @param {string} tokenAddress - Token address to snipe
+   * @param {number} amount - Amount of SOL to spend
+   * @param {number} slippage - Slippage percentage
+   */
+  handleTokenSnipe: async (ctx, tokenAddress, amount, slippage) => {
+    try {
+      // Send initial status message
+      const statusMsg = await ctx.reply(
+        `🔍 Analyzing token ${tokenAddress}...\n` +
+        `This may take a few moments.`
+      );
+      
+      // Analyze token risk
+      const riskAnalysis = await solanaClient.analyzeTokenRisk(tokenAddress);
+      
+      // If risk analysis failed or risk is too high, warn the user
+      if (!riskAnalysis.success || riskAnalysis.riskLevel > 70) {
+        const warnings = riskAnalysis.warnings ? riskAnalysis.warnings.join('\n• ') : 'Unknown risk';
+        
+        await ctx.telegram.editMessageText(
+          ctx.chat.id,
+          statusMsg.message_id,
+          null,
+          `⚠️ High Risk Token Detected!\n\n` +
+          `Risk Level: ${riskAnalysis.riskLevel}%\n\n` +
+          `Warnings:\n• ${warnings}\n\n` +
+          `Do you still want to proceed with the purchase?`,
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: '✅ Yes, buy anyway', callback_data: `force_buy_${tokenAddress}_${amount}_${slippage}` },
+                  { text: '❌ No, cancel', callback_data: 'cancel_snipe' }
+                ]
+              ]
+            }
+          }
+        );
+        return;
+      }
+      
+      // Update status message with risk analysis
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        statusMsg.message_id,
+        null,
+        `✅ Token Analysis Complete\n\n` +
+        `Risk Level: ${riskAnalysis.riskLevel}%\n\n` +
+        `Proceeding with purchase...\n` +
+        `• Token: ${tokenAddress}\n` +
+        `• Amount: ${amount} SOL\n` +
+        `• Slippage: ${slippage}%`
+      );
+      
+      // Execute the snipe
+      const snipeResult = await solanaClient.snipeToken(tokenAddress, amount, {
+        slippage,
+        stopLoss: ctx.session.settings.stopLoss,
+        takeProfit: ctx.session.settings.takeProfit
+      });
+      
+      if (snipeResult.success) {
+        await ctx.telegram.editMessageText(
+          ctx.chat.id,
+          statusMsg.message_id,
+          null,
+          `✅ Token Sniped Successfully!\n\n` +
+          `• Token: ${tokenAddress}\n` +
+          `• Amount Spent: ${amount} SOL\n` +
+          `• Tokens Received: ~${snipeResult.tokenAmount}\n` +
+          `• Transaction: ${snipeResult.signature}\n\n` +
+          `Would you like to set up stop-loss/take-profit?`,
+          keyboards.stopLossTakeProfitKeyboard
+        );
+        
+        // Store the token in session for SL/TP setup
+        ctx.session.lastBuyToken = tokenAddress;
+      } else {
+        await ctx.telegram.editMessageText(
+          ctx.chat.id,
+          statusMsg.message_id,
+          null,
+          `❌ Sniping Failed!\n\n` +
+          `• Token: ${tokenAddress}\n` +
+          `• Error: ${snipeResult.error || 'Unknown error'}\n\n` +
+          `Please try again or choose a different token.`,
+          keyboards.mainKeyboard
+        );
+      }
+    } catch (error) {
+      logger.error(`Error in handleTokenSnipe: ${error.message}`);
+      ctx.reply('Error sniping token. Please try again.', keyboards.mainKeyboard);
+    }
+  },
+  
+  /**
+   * Handle force buy callback
+   * @param {Object} ctx - Telegram context
+   * @param {string} data - Callback data in format force_buy_TOKEN_AMOUNT_SLIPPAGE
+   */
+  handleForceBuy: async (ctx, data) => {
+    try {
+      const parts = data.split('_');
+      const tokenAddress = parts[2];
+      const amount = parseFloat(parts[3]);
+      const slippage = parseFloat(parts[4]);
+      
+      await ctx.answerCbQuery('Proceeding with purchase despite high risk');
+      
+      // Proceed with snipe
+      await exports.handleTokenSnipe(ctx, tokenAddress, amount, slippage);
+    } catch (error) {
+      logger.error(`Error in handleForceBuy: ${error.message}`);
+      ctx.reply('Error processing purchase. Please try again.', keyboards.mainKeyboard);
+    }
+  },
+  
+  /**
+   * Handle cancel snipe callback
+   * @param {Object} ctx - Telegram context
+   */
+  handleCancelSnipe: async (ctx) => {
+    try {
+      await ctx.answerCbQuery('Purchase cancelled');
+      await ctx.reply('Purchase cancelled. Your funds are safe.', keyboards.mainKeyboard);
+    } catch (error) {
+      logger.error(`Error in handleCancelSnipe: ${error.message}`);
+      ctx.reply('Error cancelling purchase. Please try again.', keyboards.mainKeyboard);
+    }
+  },
+  
+  /**
+   * Handle the /snipe command
+   * @param {Object} ctx - Telegram context
+   */
+  handleSnipe: async (ctx) => {
+    try {
+      // Get command arguments if any
+      const args = ctx.message.text.split(' ').slice(1);
+      
+      if (args.length === 0) {
+        // No arguments, provide instructions
+        await ctx.reply(
+          `📝 Token Sniping\n\n` +
+          `To snipe a token, use one of these formats:\n\n` +
+          `1. /snipe [token_address]\n` +
+          `2. /snipe [token_address] [amount_in_sol]\n` +
+          `3. /snipe [token_address] [amount_in_sol] [slippage]\n\n` +
+          `Example: /snipe EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v 0.1 1\n\n` +
+          `Or just enter a token address below:`,
+          { reply_markup: { force_reply: true } }
+        );
+        return;
+      }
+      
+      // Token address is the first argument
+      const tokenAddress = args[0];
+      
+      if (args.length === 1) {
+        // Only token address provided, handle like regular token input
+        return await exports.handleTokenInput(ctx, tokenAddress);
+      }
+      
+      // Amount is the second argument if provided
+      const amount = parseFloat(args[1]);
+      if (isNaN(amount) || amount <= 0) {
+        await ctx.reply('Invalid amount. Please enter a positive number.');
+        return;
+      }
+      
+      // Slippage is the third argument if provided, otherwise use default
+      const slippage = args.length > 2 ? parseFloat(args[2]) : ctx.session.settings.slippage;
+      if (isNaN(slippage) || slippage <= 0) {
+        await ctx.reply('Invalid slippage. Please enter a positive number.');
+        return;
+      }
+      
+      // Set up snipe data in session
+      ctx.session.snipe = {
+        token: tokenAddress,
+        amount: amount
+      };
+      
+      // Run token analysis and proceed with snipe
+      await exports.handleTokenSnipe(ctx, tokenAddress, amount, slippage);
+    } catch (error) {
+      logger.error(`Error in handleSnipe: ${error.message}`);
+      ctx.reply('Error processing snipe command. Please try again.', keyboards.mainKeyboard);
     }
   }
 };

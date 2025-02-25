@@ -86,6 +86,9 @@ bot.command('help', commands.handleHelp);
 // Handle /balance command
 bot.command('balance', commands.handleBalance);
 
+// Handle /snipe command
+bot.command('snipe', commands.handleSnipe);
+
 // Handle button clicks
 bot.action('buy', commands.handleBuy);
 bot.action('fund', commands.handleFund);
@@ -103,6 +106,10 @@ bot.action(/^slippage_([0-9.]+)$/, (ctx) => commands.handleSlippageSelection(ctx
 // Handle stop-loss/take-profit setup
 bot.action(/^sl_tp_([0-9]+)_([0-9]+)$/, (ctx) => commands.handleStopLossTakeProfit(ctx, ctx.match[0]));
 bot.action('skip_sl_tp', (ctx) => commands.handleStopLossTakeProfit(ctx, 'skip_sl_tp'));
+
+// Handle force buy for high risk tokens
+bot.action(/^force_buy_(.+)_([0-9.]+)_([0-9.]+)$/, (ctx) => commands.handleForceBuy(ctx, ctx.match[0]));
+bot.action('cancel_snipe', commands.handleCancelSnipe);
 
 // Handle token address inputs (for buying)
 bot.on(message('text'), async (ctx) => {

@@ -4,12 +4,16 @@ const bs58 = require('bs58');
 const logger = require('./logger');
 const WalletManager = require('./wallet');
 const TransactionUtility = require('./transactions');
+const TokenSniper = require('../trading/sniper');
+const RiskAnalyzer = require('../trading/risk-analyzer');
 
 class SolanaClient {
   constructor() {
     this.connection = null;
     this.walletManager = null;
     this.transactionUtility = null;
+    this.tokenSniper = null;
+    this.riskAnalyzer = null;
     this.initialized = false;
     this.demoMode = false;
     this.demoWalletAddress = null;
@@ -50,8 +54,18 @@ class SolanaClient {
         logger.info('No private key provided, using demo mode');
       }
       
+      // Initialize risk analyzer
+      this.riskAnalyzer = new RiskAnalyzer(this.connection);
+      
       // Initialize transaction utility
       this.transactionUtility = new TransactionUtility(this);
+      
+      // Initialize token sniper
+      this.tokenSniper = new TokenSniper(
+        this.connection,
+        this.walletManager,
+        this.riskAnalyzer
+      );
       
       this.initialized = true;
       logger.info('Solana client initialized successfully');
@@ -289,6 +303,82 @@ class SolanaClient {
       stopLossPercentage,
       takeProfitPercentage
     );
+  }
+
+  /**
+   * Snipe a token
+   * @param {string} tokenAddress - Token address to snipe
+   * @param {number} amountSol - Amount of SOL to spend
+   * @param {Object} options - Snipe options (slippage, maxRisk, stopLoss, takeProfit)
+   * @returns {Promise<Object>} Snipe result
+   */
+  async snipeToken(tokenAddress, amountSol, options = {}) {
+    if (!this.initialized) {
+      await this.init();
+    }
+    
+    try {
+      // If in demo mode, simulate a snipe
+      if (this.demoMode) {
+        logger.info(`Demo mode: Simulating snipe for token ${tokenAddress} with ${amountSol} SOL`);
+        
+        // Simulate delay
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+        // Simulate token risk analysis
+        const riskLevel = Math.floor(Math.random() * 50);
+        logger.info(`Demo mode: Risk analysis completed with level ${riskLevel}%`);
+        
+        // Generate a fake transaction hash
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+        let txHash = '';
+        for (let i = 0; i < 64; i++) {
+          txHash += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        
+        return {
+          success: true,
+          tokenAddress,
+          amountInSol: amountSol,
+          signature: txHash,
+          positionId: txHash,
+          tokenAmount: amountSol * 1000, // Simulated token amount
+          riskLevel
+        };
+      }
+      
+      // Use the token sniper for real sniping
+      return await this.tokenSniper.snipeToken(tokenAddress, amountSol, options);
+    } catch (error) {
+      logger.error(`Error sniping token: ${error.message}`);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+  
+  /**
+   * Analyze token risks
+   * @param {string} tokenAddress - Token address to analyze
+   * @returns {Promise<Object>} Risk analysis result
+   */
+  async analyzeTokenRisk(tokenAddress) {
+    if (!this.initialized) {
+      await this.init();
+    }
+    
+    try {
+      return await this.riskAnalyzer.analyzeToken(tokenAddress);
+    } catch (error) {
+      logger.error(`Error analyzing token risk: ${error.message}`);
+      return {
+        success: false,
+        error: error.message,
+        riskLevel: 100,
+        warnings: ['Error analyzing token']
+      };
+    }
   }
 }
 

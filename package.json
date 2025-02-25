@@ -19,6 +19,7 @@
     "author": "",
     "license": "MIT",
     "dependencies": {
+        "@project-serum/serum": "^0.13.65",
         "@solana/spl-token": "^0.3.8",
         "@solana/web3.js": "^1.87.6",
         "axios": "^1.7.9",
