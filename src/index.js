@@ -12,6 +12,13 @@ const commands = require('./commands');
 const logger = require('./utils/logger');
 const solanaClient = require('./utils/solana');
 
+// Import trading components
+const RiskAnalyzer = require('./trading/risk-analyzer');
+const TokenSniper = require('./trading/sniper');
+const PositionManager = require('./trading/position-manager');
+const JupiterClient = require('./utils/jupiter');
+const database = require('./utils/database');
+
 // BOOTSTRAP: Create data directories if they don't exist
 ['logs', 'data'].forEach(dir => {
   if (!fs.existsSync(dir)) {
@@ -182,8 +189,34 @@ async function registerBotCommands() {
   }
 }
 
-// BOOTSTRAP: Start the bot with enhanced error handling
-(async () => {
+// Initialize trading components 
+const initTradingComponents = async () => {
+  try {
+    logger.info('Initializing trading components');
+    const riskAnalyzer = new RiskAnalyzer();
+    
+    // Initialize position manager
+    const positionManager = new PositionManager(connection, wallet);
+    
+    // Load any existing positions from database
+    await positionManager.loadPositions();
+    
+    // Initialize token sniper with position manager
+    const tokenSniper = new TokenSniper(connection, wallet, riskAnalyzer, positionManager);
+    
+    logger.info('Trading components initialized successfully');
+    return { riskAnalyzer, tokenSniper, positionManager };
+  } catch (error) {
+    logger.error(`Error initializing trading components: ${error.message}`);
+    return { 
+      riskAnalyzer: new RiskAnalyzer(),
+      tokenSniper: new TokenSniper(connection, wallet, new RiskAnalyzer()),
+      positionManager: new PositionManager(connection, wallet)
+    };
+  }
+};
+
+const startBot = async () => {
   try {
     logger.info('Starting TraderTony v3 bot...');
     
@@ -193,6 +226,9 @@ async function registerBotCommands() {
     
     // Register commands with Telegram
     await registerBotCommands();
+    
+    // Initialize trading components (modify existing initialization)
+    const { riskAnalyzer, tokenSniper, positionManager } = await initTradingComponents();
     
     // Launch the bot with improved configuration
     await bot.launch({
@@ -220,4 +256,7 @@ async function registerBotCommands() {
     logger.error(`Error stack: ${error.stack}`);
     console.error('❌ Failed to start bot:', error.message);
   }
-})();
+};
+
+// BOOTSTRAP: Start the bot with enhanced error handling
+startBot();

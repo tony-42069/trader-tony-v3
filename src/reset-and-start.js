@@ -1,167 +1,120 @@
-// Script to reset webhook connection and start the bot with proper cleanup
-require('dotenv').config();
+/**
+ * Script to cleanly restart the TraderTony bot
+ * This script will:
+ * 1. Delete the Telegram webhook
+ * 2. Terminate any running bot processes
+ * 3. Start a fresh bot instance
+ */
+
 const axios = require('axios');
-const { spawn, exec } = require('child_process');
+const { exec } = require('child_process');
 const path = require('path');
 const logger = require('./utils/logger');
+const config = require('./config');
 const fs = require('fs');
 
+// Ensure data directory exists
+const dataDir = path.join(__dirname, '..', 'data');
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+  logger.info(`Created data directory at ${dataDir}`);
+}
+
 /**
- * Reset Telegram webhook, stop running instances, and start a fresh bot
+ * Delete the bot's webhook
+ */
+async function deleteWebhook() {
+  try {
+    const response = await axios.get(
+      `https://api.telegram.org/bot${config.TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true`
+    );
+    if (response.data.ok) {
+      logger.info('Telegram webhook deleted successfully');
+      return true;
+    } else {
+      logger.error(`Failed to delete webhook: ${response.data.description}`);
+      return false;
+    }
+  } catch (error) {
+    logger.error(`Error deleting webhook: ${error.message}`);
+    return false;
+  }
+}
+
+/**
+ * Kill any running bot processes
+ */
+function killBotProcesses() {
+  return new Promise((resolve) => {
+    // Different command based on OS
+    const isWindows = process.platform === 'win32';
+    const cmd = isWindows
+      ? 'taskkill /F /FI "IMAGENAME eq node.exe" /FI "WINDOWTITLE eq *trader-tony*"'
+      : "ps aux | grep 'node.*trader-tony' | grep -v grep | awk '{print $2}' | xargs -r kill -9";
+
+    exec(cmd, (error) => {
+      if (error) {
+        logger.info('No previous bot processes found or could not kill processes');
+      } else {
+        logger.info('Previous bot processes terminated');
+      }
+      
+      // Small delay to ensure ports are freed
+      setTimeout(resolve, 1000);
+    });
+  });
+}
+
+/**
+ * Start the bot in a detached process
+ */
+function startBot() {
+  return new Promise((resolve) => {
+    const botPath = path.join(__dirname, 'index.js');
+    
+    const child = exec(`node ${botPath}`, (error) => {
+      if (error) {
+        logger.error(`Failed to start bot: ${error.message}`);
+      }
+    });
+    
+    // Detach the process
+    if (child.unref) {
+      child.unref();
+    }
+    
+    logger.info('Bot has been started in a separate process');
+    resolve();
+  });
+}
+
+/**
+ * Main function to reset and start the bot
  */
 async function resetAndStart() {
   try {
-    logger.info('Starting reset and bot startup sequence');
-    console.log('🚀 TraderTony Bot Launcher v3');
-    console.log('==========================');
+    logger.info('Starting bot reset procedure...');
     
-    const token = process.env.TELEGRAM_BOT_TOKEN;
-    if (!token) {
-      console.error('❌ ERROR: No Telegram bot token found in .env file');
-      logger.error('No Telegram bot token found in environment variables');
-      process.exit(1);
-    }
+    // Step 1: Delete webhook
+    await deleteWebhook();
     
-    // 1. Check if required directories exist
-    checkDirectories();
+    // Step 2: Kill existing processes
+    await killBotProcesses();
     
-    // 2. Reset webhook
-    await resetWebhook(token);
+    // Step 3: Start the bot
+    await startBot();
     
-    // 3. Stop bot using our stopbot.js script (safer than direct process killing)
-    await stopBotSafely();
+    logger.info('Bot has been successfully reset and started');
     
-    // 4. Start bot
-    startBot();
-    
-  } catch (error) {
-    console.error('❌ Error during reset and start:', error.message);
-    logger.error(`Error during reset and start: ${error.message}`);
-    console.error('\nPlease try running manually:');
-    console.error('1. node src/stopbot.js');
-    console.error('2. node src/index.js');
-  }
-}
-
-/**
- * Check if required directories exist and create them if needed
- */
-function checkDirectories() {
-  console.log('🔍 Checking required directories...');
-  
-  ['logs', 'data'].forEach(dir => {
-    if (!fs.existsSync(dir)) {
-      console.log(`📁 Creating ${dir} directory...`);
-      fs.mkdirSync(dir);
-      logger.info(`Created directory: ${dir}`);
-    }
-  });
-  
-  console.log('✅ Directory checks completed');
-}
-
-/**
- * Reset Telegram webhook
- * @param {string} token - Bot token
- */
-async function resetWebhook(token) {
-  console.log('🔄 Resetting Telegram webhook connection...');
-  
-  try {
-    const response = await axios.get(
-      `https://api.telegram.org/bot${token}/deleteWebhook?drop_pending_updates=true`,
-      { timeout: 10000 }
-    );
-    
-    if (response.data.ok) {
-      console.log('✅ Webhook deleted successfully!');
-      logger.info('Webhook deleted successfully');
-    } else {
-      console.error('⚠️ Warning: Failed to delete webhook:', response.data);
-      logger.warn(`Failed to delete webhook: ${JSON.stringify(response.data)}`);
-    }
-  } catch (error) {
-    console.error('⚠️ Warning: Error resetting webhook -', error.message);
-    logger.error(`Error resetting webhook: ${error.message}`);
-    // Continue despite webhook error
-  }
-}
-
-/**
- * Stop bot safely by running stopbot.js
- */
-async function stopBotSafely() {
-  console.log('🔄 Stopping any running bot instances...');
-  
-  return new Promise((resolve) => {
-    // Run our safer stop script instead of direct process killing
-    const stopbotPath = path.join(__dirname, 'stopbot.js');
-    
-    exec(`node "${stopbotPath}"`, (error, stdout, stderr) => {
-      if (error) {
-        console.error('⚠️ Warning:', error.message);
-        logger.warn(`Error running stopbot.js: ${error.message}`);
-      }
-      
-      if (stdout) {
-        console.log(stdout);
-      }
-      
-      if (stderr) {
-        console.error(stderr);
-      }
-      
-      // Add a small delay to ensure processes are terminated
-      setTimeout(() => {
-        console.log('✅ Previous bot instances stopped');
-        resolve();
-      }, 2000);
-    });
-  });
-}
-
-/**
- * Start the bot with improved error handling
- */
-function startBot() {
-  console.log('🚀 Starting bot...');
-  logger.info('Starting bot process');
-  
-  try {
-    // Start the main bot process in detached mode
-    const indexPath = path.join(__dirname, 'index.js');
-    
-    const botProcess = spawn('node', [indexPath], {
-      detached: true,
-      stdio: 'inherit',
-      windowsHide: false
-    });
-    
-    // Log process ID
-    logger.info(`Bot process started with PID: ${botProcess.pid}`);
-    
-    // Handle process events
-    botProcess.on('error', (err) => {
-      console.error('❌ Failed to start bot process:', err.message);
-      logger.error(`Failed to start bot process: ${err}`);
-    });
-    
-    // Unref the child process to allow the parent to exit
-    botProcess.unref();
-    
-    console.log('✨ Bot startup sequence completed!');
-    console.log('📱 Open your Telegram app and message your bot to start using it.');
-    console.log('🛑 To stop the bot later, run: node src/stopbot.js');
-    
-    // Exit this process after a delay to allow logs to be written
+    // Exit this process after a delay
     setTimeout(() => {
       process.exit(0);
-    }, 1000);
+    }, 2000);
   } catch (error) {
-    console.error('❌ Error starting bot:', error.message);
-    logger.error(`Error starting bot: ${error.message}`);
+    logger.error(`Failed to reset and start bot: ${error.message}`);
+    process.exit(1);
   }
 }
 
-// Execute the reset and start sequence
+// Run the reset and start procedure
 resetAndStart(); 
