@@ -116,11 +116,15 @@ bot.command('wallet', commands.handleWallet);
 // Handle /refresh command
 bot.command('refresh', commands.handleRefresh);
 
+// Handle /positions command
+bot.command('positions', commands.handlePositions);
+
 // Handle button clicks
 bot.action('snipe', commands.handleSnipe);
 bot.action('buy', commands.handleBuy);
 bot.action('fund', commands.handleFund);
 bot.action('monitor', commands.handleMonitor);
+bot.action('positions', commands.handlePositions);
 bot.action('limitOrders', commands.handleLimitOrders);
 bot.action('wallet', commands.handleWallet);
 bot.action('settings', commands.handleSettings);
@@ -177,7 +181,8 @@ async function registerBotCommands() {
       { command: 'buy', description: 'Enter a token to buy' },
       { command: 'fund', description: 'View wallet funding options' },
       { command: 'wallet', description: 'View wallet information' },
-      { command: 'refresh', description: 'Update wallet balance' }
+      { command: 'refresh', description: 'Update wallet balance' },
+      { command: 'positions', description: 'View your open positions' }
     ]);
     logger.info('Bot commands registered with Telegram');
   } catch (error) {

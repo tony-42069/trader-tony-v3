@@ -6,6 +6,7 @@ const WalletManager = require('./wallet');
 const TransactionUtility = require('./transactions');
 const TokenSniper = require('../trading/sniper');
 const RiskAnalyzer = require('../trading/risk-analyzer');
+const PositionManager = require('../trading/position-manager');
 
 class SolanaClient {
   constructor() {
@@ -14,6 +15,7 @@ class SolanaClient {
     this.transactionUtility = null;
     this.tokenSniper = null;
     this.riskAnalyzer = null;
+    this.positionManager = null;
     this.initialized = false;
     this.demoMode = false;
     this.demoWalletAddress = null;
@@ -67,12 +69,170 @@ class SolanaClient {
         this.riskAnalyzer
       );
       
+      // Initialize position manager
+      this.positionManager = new PositionManager(
+        this.connection,
+        this.walletManager
+      );
+      
+      // Set up position manager event listeners
+      this.setupPositionEventListeners();
+      
       this.initialized = true;
       logger.info('Solana client initialized successfully');
       return true;
     } catch (error) {
       logger.error(`Failed to initialize Solana client: ${error.message}`);
       throw error;
+    }
+  }
+
+  /**
+   * Setup position manager event listeners
+   */
+  setupPositionEventListeners() {
+    if (!this.positionManager) return;
+    
+    // When a position is closed
+    this.positionManager.on('positionClosed', (position) => {
+      logger.info(`Position closed: ${position.id}, profit: ${position.profit.toFixed(2)}%`);
+      // Additional handling if needed
+    });
+    
+    // When a sell is executed
+    this.positionManager.on('sellExecuted', (data) => {
+      logger.info(`Sell executed for position ${data.positionId}, reason: ${data.reason}`);
+      // Additional handling if needed
+    });
+  }
+
+  /**
+   * Get all open positions
+   * @returns {Array} Open positions
+   */
+  getOpenPositions() {
+    if (!this.initialized) {
+      logger.warn('Attempted to get positions before initialization');
+      return [];
+    }
+    
+    return this.positionManager.getOpenPositions();
+  }
+
+  /**
+   * Get all positions (open and closed)
+   * @returns {Array} All positions
+   */
+  getAllPositions() {
+    if (!this.initialized) {
+      logger.warn('Attempted to get positions before initialization');
+      return [];
+    }
+    
+    return this.positionManager.getAllPositions();
+  }
+
+  /**
+   * Set up stop-loss and take-profit for a token
+   * @param {string} tokenAddress - Token address
+   * @param {string} positionId - Position ID to update
+   * @param {number} stopLossPercentage - Stop loss percentage
+   * @param {number} takeProfitPercentage - Take profit percentage
+   * @returns {Promise<Object>} Order setup result
+   */
+  async setupStopLossTakeProfit(tokenAddress, positionId, stopLossPercentage, takeProfitPercentage) {
+    if (!this.initialized) {
+      await this.init();
+    }
+    
+    try {
+      // If we don't have a position ID but do have a token address,
+      // try to find the most recent open position for that token
+      if (!positionId && tokenAddress) {
+        const openPositions = this.positionManager.getOpenPositions()
+          .filter(p => p.tokenAddress === tokenAddress)
+          .sort((a, b) => b.createdAt - a.createdAt);
+        
+        if (openPositions.length > 0) {
+          positionId = openPositions[0].id;
+        }
+      }
+      
+      if (!positionId) {
+        return { 
+          success: false, 
+          error: 'No position ID provided and no matching open position found' 
+        };
+      }
+      
+      // Update the position with new stop-loss and take-profit values
+      const position = this.positionManager.updatePosition(positionId, {
+        stopLoss: stopLossPercentage,
+        takeProfit: takeProfitPercentage
+      });
+      
+      if (!position) {
+        return { 
+          success: false, 
+          error: `Position ${positionId} not found` 
+        };
+      }
+      
+      logger.info(`Stop-loss (${stopLossPercentage}%) and take-profit (${takeProfitPercentage}%) set for position ${positionId}`);
+      
+      return {
+        success: true,
+        positionId,
+        tokenAddress: position.tokenAddress,
+        stopLossPercentage,
+        takeProfitPercentage
+      };
+    } catch (error) {
+      logger.error(`Error setting up SL/TP: ${error.message}`);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * Setup trailing stop for a position
+   * @param {string} positionId - Position ID
+   * @param {number} trailingStopPercentage - Trailing stop percentage
+   * @returns {Promise<Object>} Setup result
+   */
+  async setupTrailingStop(positionId, trailingStopPercentage) {
+    if (!this.initialized) {
+      await this.init();
+    }
+    
+    try {
+      const position = this.positionManager.updatePosition(positionId, {
+        trailingStop: trailingStopPercentage
+      });
+      
+      if (!position) {
+        return { 
+          success: false, 
+          error: `Position ${positionId} not found` 
+        };
+      }
+      
+      logger.info(`Trailing stop (${trailingStopPercentage}%) set for position ${positionId}`);
+      
+      return {
+        success: true,
+        positionId,
+        tokenAddress: position.tokenAddress,
+        trailingStopPercentage
+      };
+    } catch (error) {
+      logger.error(`Error setting up trailing stop: ${error.message}`);
+      return {
+        success: false,
+        error: error.message
+      };
     }
   }
 
@@ -261,14 +421,47 @@ class SolanaClient {
    * @param {string} tokenAddress - Token address to buy
    * @param {number} amountSol - Amount of SOL to spend
    * @param {number} slippage - Slippage percentage
+   * @param {Object} options - Additional options (stopLoss, takeProfit)
    * @returns {Promise<Object>} Transaction result
    */
-  async buyToken(tokenAddress, amountSol, slippage) {
+  async buyToken(tokenAddress, amountSol, slippage, options = {}) {
     if (!this.initialized) {
       await this.init();
     }
     
-    return await this.transactionUtility.buyToken(tokenAddress, amountSol, slippage);
+    try {
+      // Execute the buy transaction
+      const result = await this.transactionUtility.buyToken(tokenAddress, amountSol, slippage);
+      
+      if (!result.success) {
+        return result;
+      }
+      
+      // If the buy was successful, create a position
+      if (options.trackPosition !== false) {
+        const position = this.positionManager.addPosition(
+          tokenAddress,
+          result.price || 1.0, // If price is not available, use 1.0 as default
+          result.tokenAmount,
+          {
+            stopLoss: options.stopLoss || null,
+            takeProfit: options.takeProfit || null,
+            trailingStop: options.trailingStop || null
+          }
+        );
+        
+        // Add position info to the result
+        result.positionId = position.id;
+      }
+      
+      return result;
+    } catch (error) {
+      logger.error(`Error buying token: ${error.message}`);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
   }
   
   /**
@@ -286,25 +479,6 @@ class SolanaClient {
     return await this.transactionUtility.sellToken(tokenAddress, tokenAmount, slippage);
   }
   
-  /**
-   * Set up stop-loss and take-profit for a token
-   * @param {string} tokenAddress - Token address
-   * @param {number} stopLossPercentage - Stop loss percentage
-   * @param {number} takeProfitPercentage - Take profit percentage
-   * @returns {Promise<Object>} Order setup result
-   */
-  async setupStopLossTakeProfit(tokenAddress, stopLossPercentage, takeProfitPercentage) {
-    if (!this.initialized) {
-      await this.init();
-    }
-    
-    return await this.transactionUtility.setupStopLossTakeProfit(
-      tokenAddress,
-      stopLossPercentage,
-      takeProfitPercentage
-    );
-  }
-
   /**
    * Snipe a token
    * @param {string} tokenAddress - Token address to snipe

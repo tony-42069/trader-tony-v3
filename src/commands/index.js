@@ -46,6 +46,103 @@ Active Orders: ${ctx.session.activeOrders.length}
 Security Status: 🔒 Secure`;
 };
 
+/**
+ * Handle /positions command
+ * @param {Object} ctx - Telegram context
+ */
+const handlePositions = async (ctx) => {
+  try {
+    // Get all open positions
+    const openPositions = solanaClient.getOpenPositions();
+    
+    if (openPositions.length === 0) {
+      return ctx.reply('📊 *You have no open positions*\n\nUse /snipe or /buy to purchase tokens.', {
+        parse_mode: 'Markdown'
+      });
+    }
+    
+    // Format positions for display
+    const positionsText = await formatPositions(openPositions);
+    
+    return ctx.reply(positionsText, {
+      parse_mode: 'Markdown',
+      disable_web_preview: true
+    });
+  } catch (error) {
+    logger.error(`Error in handlePositions: ${error.message}`);
+    return ctx.reply('❌ Error retrieving positions. Please try again later.');
+  }
+};
+
+/**
+ * Format positions for display
+ * @param {Array} positions - Array of positions
+ * @returns {Promise<string>} Formatted positions text
+ */
+const formatPositions = async (positions) => {
+  try {
+    let message = '📊 *Your Open Positions*\n\n';
+    
+    // Sort positions by creation date (newest first)
+    const sortedPositions = [...positions].sort((a, b) => b.createdAt - a.createdAt);
+    
+    for (const position of sortedPositions) {
+      // Get current price for P/L calculation
+      let currentPrice;
+      try {
+        currentPrice = await solanaClient.positionManager.getTokenPrice(position.tokenAddress);
+      } catch (error) {
+        currentPrice = position.entryPrice; // Use entry price if cannot get current price
+      }
+      
+      // Calculate profit/loss percentage
+      const plPercentage = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
+      const plEmoji = plPercentage >= 0 ? '🟢' : '🔴';
+      
+      // Format token address for display
+      const shortAddress = `${position.tokenAddress.substring(0, 4)}...${position.tokenAddress.substring(position.tokenAddress.length - 4)}`;
+      
+      // Format token symbol (if available)
+      let tokenSymbol = 'Unknown';
+      try {
+        const tokenInfo = await solanaClient.getTokenInfo(position.tokenAddress);
+        tokenSymbol = tokenInfo.symbol || 'Unknown';
+      } catch (error) {
+        // Use Unknown as fallback
+      }
+      
+      // Format position details
+      message += `*Token:* ${tokenSymbol} (${shortAddress})\n`;
+      message += `*Amount:* ${position.amount.toFixed(4)}\n`;
+      message += `*Entry Price:* ${position.entryPrice.toFixed(6)} SOL\n`;
+      message += `*Current Price:* ${currentPrice.toFixed(6)} SOL\n`;
+      message += `*P/L:* ${plEmoji} ${plPercentage.toFixed(2)}%\n`;
+      
+      // Add risk management settings if set
+      const riskSettings = [];
+      if (position.stopLoss) riskSettings.push(`SL: -${position.stopLoss}%`);
+      if (position.takeProfit) riskSettings.push(`TP: +${position.takeProfit}%`);
+      if (position.trailingStop) riskSettings.push(`TS: ${position.trailingStop}%`);
+      
+      if (riskSettings.length > 0) {
+        message += `*Risk Management:* ${riskSettings.join(' | ')}\n`;
+      }
+      
+      // Add when the position was opened
+      const openDate = new Date(position.createdAt).toLocaleString();
+      message += `*Opened:* ${openDate}\n\n`;
+    }
+    
+    // Add footer with explanation
+    message += `_Use /snipe [token] to add more positions_`;
+    
+    return message;
+  } catch (error) {
+    logger.error(`Error formatting positions: ${error.message}`);
+    return '❌ Error formatting positions. Please try again later.';
+  }
+};
+
 // Command handlers
 module.exports = {
   /**
@@ -776,5 +873,6 @@ module.exports = {
       logger.error(`Error in handleSnipe: ${error.message}`);
       ctx.reply('Error processing snipe command. Please try again.', keyboards.mainKeyboard);
     }
-  }
+  },
+  handlePositions
 };

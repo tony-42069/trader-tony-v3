@@ -14,15 +14,15 @@ const mainKeyboard = {
         { text: '📊 Monitor', callback_data: 'monitor' }
       ],
       [
-        { text: '🎯 Limit Orders', callback_data: 'limitOrders' },
+        { text: '📈 Positions', callback_data: 'positions' },
         { text: '👛 Wallet', callback_data: 'wallet' }
       ],
       [
-        { text: '⚙️ Settings', callback_data: 'settings' },
-        { text: '📋 DCA Orders', callback_data: 'dcaOrders' }
+        { text: '🎯 Limit Orders', callback_data: 'limitOrders' },
+        { text: '⚙️ Settings', callback_data: 'settings' }
       ],
       [
-        { text: '🤝 Refer Friends', callback_data: 'referFriends' },
+        { text: '📋 DCA Orders', callback_data: 'dcaOrders' },
         { text: '🔄 Refresh', callback_data: 'refresh' }
       ]
     ]
