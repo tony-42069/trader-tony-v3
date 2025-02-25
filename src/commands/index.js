@@ -695,6 +695,35 @@ module.exports = {
    */
   handleSnipe: async (ctx) => {
     try {
+      // Check if this is a callback from a button click
+      if (ctx.callbackQuery) {
+        await ctx.answerCbQuery();
+        
+        // Display the snipe instructions directly for button clicks
+        await ctx.reply(
+          `📝 Token Sniping\n\n` +
+          `To snipe a token, use one of these formats:\n\n` +
+          `1. /snipe [token_address]\n` +
+          `2. /snipe [token_address] [amount_in_sol]\n` +
+          `3. /snipe [token_address] [amount_in_sol] [slippage]\n\n` +
+          `Example: /snipe EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v 0.1 1\n\n` +
+          `Or just enter a token address below:`,
+          { reply_markup: { force_reply: true } }
+        );
+        return;
+      }
+      
+      // Command message handling
+      if (!ctx.message || !ctx.message.text) {
+        // Fallback for situations where message is not available
+        await ctx.reply(
+          `📝 Token Sniping\n\n` +
+          `To snipe a token, enter a token address below:`,
+          { reply_markup: { force_reply: true } }
+        );
+        return;
+      }
+      
       // Get command arguments if any
       const args = ctx.message.text.split(' ').slice(1);
       
