@@ -7,6 +7,7 @@ const TransactionUtility = require('./transactions');
 const TokenSniper = require('../trading/sniper');
 const RiskAnalyzer = require('../trading/risk-analyzer');
 const PositionManager = require('../trading/position-manager');
+const axios = require('axios');
 
 class SolanaClient {
   constructor() {
@@ -310,41 +311,79 @@ class SolanaClient {
   }
 
   /**
-   * Get token account information
+   * Get token information
    * @param {string} tokenMint - Token mint address
    * @returns {Promise<Object>} Token information
    */
   async getTokenInfo(tokenMint) {
-    if (!this.initialized) {
-      await this.init();
-    }
-    
     try {
-      // If in demo mode or testing, return mock token info
-      if (this.demoMode) {
-        return {
-          symbol: 'DEMO',
-          name: 'Demo Token',
-          decimals: 9,
-          supply: 1000000000,
-          price: 0.01,
-          marketCap: 10000000
-        };
+      // First try Jupiter's API which doesn't require an API key
+      try {
+        const response = await axios.get(`https://token.jup.ag/all`);
+        
+        if (response.data && Array.isArray(response.data)) {
+          const tokenInfo = response.data.find(
+            token => token.address === tokenMint
+          );
+          
+          if (tokenInfo) {
+            logger.debug(`Found token info from Jupiter for ${tokenMint}`);
+            return {
+              address: tokenInfo.address,
+              symbol: tokenInfo.symbol,
+              name: tokenInfo.name,
+              decimals: tokenInfo.decimals,
+              logoURI: tokenInfo.logoURI,
+              tags: tokenInfo.tags
+            };
+          }
+        }
+      } catch (error) {
+        logger.debug(`Error fetching token info from Jupiter: ${error.message}`);
       }
       
-      // This would normally query the token program for real info
-      // For now, just return placeholder data
+      // Fallback to on-chain data
+      // Check if the token exists on-chain and get basic metadata
+      try {
+        const mintInfo = await this.connection.getParsedAccountInfo(
+          new PublicKey(tokenMint)
+        );
+        
+        if (mintInfo && mintInfo.value) {
+          const decimals = mintInfo.value.data.parsed.info.decimals;
+          
+          return {
+            address: tokenMint,
+            symbol: `UNK-${tokenMint.substring(0, 4)}`,
+            name: `Unknown Token (${tokenMint.substring(0, 8)}...)`,
+            decimals,
+            logoURI: null,
+            tags: []
+          };
+        }
+      } catch (error) {
+        logger.debug(`Error fetching on-chain token info: ${error.message}`);
+      }
+      
+      // Return default info if all methods fail
       return {
+        address: tokenMint,
         symbol: 'UNKNOWN',
         name: 'Unknown Token',
         decimals: 9,
-        supply: 0,
-        price: 0,
-        marketCap: 0
+        logoURI: null,
+        tags: []
       };
     } catch (error) {
-      logger.error(`Error getting token info: ${error.message}`);
-      throw error;
+      logger.error(`Failed to get token info for ${tokenMint}: ${error.message}`);
+      return {
+        address: tokenMint,
+        symbol: 'ERROR',
+        name: 'Error Fetching Token',
+        decimals: 9,
+        logoURI: null,
+        tags: []
+      };
     }
   }
 

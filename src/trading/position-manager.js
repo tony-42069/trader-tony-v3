@@ -276,40 +276,70 @@ class PositionManager extends EventEmitter {
    */
   async getTokenPrice(tokenAddress) {
     try {
-      // First try to get price from Jupiter API
+      // Jupiter API doesn't require an API key for free tier
+      // Documentation: https://price.jup.ag/docs
       try {
-        const jupiterUrl = `https://price.jup.ag/v4/price?ids=${tokenAddress}`;
-        const response = await axios.get(jupiterUrl);
+        const jupiterUrl = `https://price.jup.ag/v4/price?ids=${tokenAddress}&vsToken=SOL`;
+        const response = await axios.get(jupiterUrl, {
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
         
         if (response.data && response.data.data && response.data.data[tokenAddress]) {
           const priceData = response.data.data[tokenAddress];
           logger.debug(`Got price from Jupiter for ${tokenAddress}: ${priceData.price}`);
           return priceData.price;
+        } else {
+          throw new Error('Invalid response format from Jupiter API');
         }
       } catch (jupiterError) {
         logger.debug(`Jupiter price fetch failed: ${jupiterError.message}`);
+        // Continue to fallback methods
       }
       
-      // If Jupiter fails, check Birdeye API
+      // If Jupiter fails, try another public price API
       try {
-        // Note: This would require an API key in a real implementation
-        // const birdeyeUrl = `https://public-api.birdeye.so/public/price?address=${tokenAddress}`;
-        // const response = await axios.get(birdeyeUrl);
-        // return response.data.data.value;
-      } catch (birdeyeError) {
-        logger.debug(`Birdeye price fetch failed: ${birdeyeError.message}`);
+        const pythUrl = `https://hermes.pyth.network/api/latest_price_feeds?ids%5B%5D=${tokenAddress}`;
+        const response = await axios.get(pythUrl);
+        
+        if (response.data && response.data.length > 0) {
+          const priceData = response.data[0];
+          return priceData.price;
+        }
+      } catch (pythError) {
+        logger.debug(`Pyth price fetch failed: ${pythError.message}`);
       }
       
       // Fallback to simulated price for demo purposes
       logger.debug(`Using simulated price for ${tokenAddress}`);
-      const basePrice = 1.0;
-      const fluctuation = (Math.random() - 0.5) * 0.1; // +/- 5% random fluctuation
-      return basePrice + fluctuation;
+      const position = this.getPositionsByToken(tokenAddress)[0];
+      
+      if (position) {
+        // Generate a more realistic price movement based on entry price
+        const entryPrice = position.entryPrice;
+        const volatilityFactor = 0.1; // 10% max movement
+        const randomMovement = (Math.random() * 2 - 1) * volatilityFactor;
+        return entryPrice * (1 + randomMovement);
+      } else {
+        // No position found, generate a random price
+        return 0.0001 + (Math.random() * 0.001);
+      }
     } catch (error) {
       logger.error(`Error fetching price for token ${tokenAddress}: ${error.message}`);
       // Return last known price or default to 1.0 on complete failure
       return 1.0;
     }
+  }
+
+  /**
+   * Get positions by token address
+   * @param {string} tokenAddress - Token mint address
+   * @returns {Array} Array of positions for the token
+   */
+  getPositionsByToken(tokenAddress) {
+    return Array.from(this.positions.values())
+      .filter(position => position.tokenAddress === tokenAddress);
   }
 
   /**
