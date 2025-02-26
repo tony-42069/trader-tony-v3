@@ -2,7 +2,7 @@
 
 TraderTony v3 is an advanced Telegram bot for Solana trading with powerful features for token sniping, analysis, and portfolio management.
 
-![TraderTony Bot](https://i.imgur.com/7YKXXuq.png)
+![TraderTony Bot](public/Untitled%20design%20(1).png)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Solana](https://img.shields.io/badge/Solana-14151A?logo=solana&logoColor=00FFA3)](https://solana.com/)
