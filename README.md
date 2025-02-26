@@ -2,7 +2,14 @@
 
 TraderTony v3 is an advanced Telegram bot for Solana trading with powerful features for token sniping, analysis, and portfolio management.
 
-![TraderTony Bot](https://i.imgur.com/placeholder-image.png)
+![TraderTony Bot](https://i.imgur.com/7YKXXuq.png)
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Solana](https://img.shields.io/badge/Solana-14151A?logo=solana&logoColor=00FFA3)](https://solana.com/)
+[![Jupiter](https://img.shields.io/badge/Jupiter_DEX-Connected-brightgreen)](https://jup.ag/)
+[![Telegram](https://img.shields.io/badge/Telegram-Bot-blue?logo=telegram)](https://telegram.org/)
+[![Phantom](https://img.shields.io/badge/Phantom-Integrated-purple?logo=phantom)](https://phantom.app/)
+[![Node.js](https://img.shields.io/badge/Node.js-18+-green?logo=node.js)](https://nodejs.org/)
 
 ## Features
 
@@ -29,6 +36,12 @@ TraderTony v3 is an advanced Telegram bot for Solana trading with powerful featu
   - Transaction signing verification
   - Anti-MEV transaction routing
   - Real-time risk assessment
+
+- 🌐 **Phantom Wallet Integration**
+  - QR code generation for deposits
+  - Solana Pay integration
+  - Easy withdrawals to Phantom wallet
+  - Secure transaction signing
 
 ## Quick Start
 
@@ -58,8 +71,10 @@ TraderTony v3 is an advanced Telegram bot for Solana trading with powerful featu
    
    # Solana Configuration
    SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
+   # Uncomment and add your private key for transaction signing
+   # SOLANA_PRIVATE_KEY=your_base58_private_key
    
-   # Wallet Configuration (Demo Mode)
+   # Wallet Configuration
    DEMO_MODE=true
    DEMO_WALLET_ADDRESS=your_wallet_address
    
@@ -85,14 +100,25 @@ TraderTony v3 is an advanced Telegram bot for Solana trading with powerful featu
 
 ### Main Features
 
-- **Buy** - Enter a token address to buy
-- **Fund** - View funding options for your wallet
-- **Monitor** - Track token prices and set alerts
-- **Limit Orders** - Create buy/sell orders at specific prices
+- **Buy** - Enter a token address to buy with customizable slippage
+- **Fund** - View funding options including Phantom wallet deposits
+- **Monitor** - Track token prices and set alerts with customizable thresholds
+- **Positions** - View current token positions and performance
 - **Wallet** - View wallet information and token holdings
-- **Settings** - Configure trading parameters
-- **DCA Orders** - Set up dollar-cost averaging
-- **Refer Friends** - Share the bot with others
+- **Settings** - Configure trading parameters and preferences
+- **DCA Orders** - Set up dollar-cost averaging strategies
+- **Phantom Connect** - Deposit and withdraw using Phantom wallet
+
+## Implemented Features
+
+- ✅ Real-time token price monitoring
+- ✅ Jupiter DEX integration for token swaps
+- ✅ Basic token risk analysis
+- ✅ Price alert system
+- ✅ Position tracking with automatic updates
+- ✅ Phantom wallet integration for deposits/withdrawals
+- ✅ Solana Pay and QR code generation
+- ✅ Real wallet connection with transaction signing
 
 ## Development
 
@@ -104,12 +130,22 @@ trader-tony-v3/
 │   ├── commands/       # Command handlers
 │   ├── keyboards/      # Telegram keyboard layouts
 │   ├── utils/          # Utility functions
+│   │   ├── phantom.js  # Phantom wallet integration
+│   │   ├── jupiter.js  # Jupiter DEX integration
+│   │   └── solana.js   # Solana blockchain utilities
+│   ├── trading/        # Trading functionality
 │   ├── index.js        # Main bot entry point
 │   └── reset-and-start.js  # Script to reset webhook and start bot
 ├── logs/               # Log files
+├── data/               # Persistent data storage
+├── ROADMAP.md          # Development roadmap
 ├── .env                # Environment variables
 └── package.json        # Dependencies
 ```
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
