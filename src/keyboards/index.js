@@ -55,6 +55,12 @@ const fundKeyboard = {
   reply_markup: {
     inline_keyboard: [
       [
+        { text: '📱 Deposit from Phantom', callback_data: 'deposit_phantom' }
+      ],
+      [
+        { text: '💸 Withdraw to Phantom', callback_data: 'withdraw_phantom' }
+      ],
+      [
         { text: 'MoonPay', url: 'https://www.moonpay.com/buy/sol' }
       ],
       [
@@ -62,6 +68,43 @@ const fundKeyboard = {
       ],
       [
         { text: '« Back', callback_data: 'refresh' }
+      ]
+    ]
+  }
+};
+
+// Phantom deposit keyboard with QR code option
+const phantomDepositKeyboard = {
+  reply_markup: {
+    inline_keyboard: [
+      [
+        { text: '📲 Generate QR Code', callback_data: 'generate_qr' }
+      ],
+      [
+        { text: '📋 Copy Solana Pay Link', callback_data: 'copy_pay_link' }
+      ],
+      [
+        { text: '« Back to Funding Options', callback_data: 'fund' }
+      ]
+    ]
+  }
+};
+
+// Phantom withdraw keyboard
+const phantomWithdrawKeyboard = {
+  reply_markup: {
+    inline_keyboard: [
+      [
+        { text: '0.1 SOL', callback_data: 'withdraw_0.1' }
+      ],
+      [
+        { text: '0.5 SOL', callback_data: 'withdraw_0.5' }
+      ],
+      [
+        { text: '1 SOL', callback_data: 'withdraw_1' }
+      ],
+      [
+        { text: '« Back to Funding Options', callback_data: 'fund' }
       ]
     ]
   }
@@ -178,5 +221,7 @@ module.exports = {
   settingsKeyboard,
   limitOrderKeyboard,
   dcaOrderKeyboard,
-  backToMainKeyboard
+  backToMainKeyboard,
+  phantomDepositKeyboard,
+  phantomWithdrawKeyboard
 };

@@ -5,7 +5,6 @@ const {
   LAMPORTS_PER_SOL 
 } = require('@solana/web3.js');
 const { Token, u64 } = require('@solana/spl-token');
-const { Market } = require('@project-serum/serum');
 const logger = require('../utils/logger');
 const JupiterClient = require('../utils/jupiter');
 
@@ -34,7 +33,7 @@ class TokenSniper {
     try {
       logger.info(`Starting snipe operation for token ${tokenAddress} with ${amountInSol} SOL`);
       
-      // Demo mode handling - same as before
+      // Demo mode handling
       if (this.wallet.demoMode) {
         logger.info(`Demo mode: Simulating snipe for token ${tokenAddress} with ${amountInSol} SOL`);
         await new Promise(resolve => setTimeout(resolve, 1500)); // Simulate delay

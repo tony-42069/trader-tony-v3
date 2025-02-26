@@ -7,7 +7,7 @@ const {
   Connection,
   LAMPORTS_PER_SOL
 } = require('@solana/web3.js');
-const logger = require('./logger');
+const logger = require('../utils/logger');
 
 /**
  * JupiterClient - A utility class for interacting with Jupiter DEX API v6
@@ -221,7 +221,7 @@ class JupiterClient {
   }
 
   /**
-   * Gets the price of a token in SOL
+   * Get token price relative to SOL
    * @param {string} tokenMint - Token mint address
    * @returns {Promise<number>} Price in SOL per token
    */
@@ -230,33 +230,20 @@ class JupiterClient {
       // Use a small amount for price quote to minimize price impact
       const smallAmount = 0.01; // 0.01 SOL
       
-      // First try SOL to token direction (buying the token)
-      let quoteResult = await this.getQuote('SOL', tokenMint, smallAmount);
+      const quoteResult = await this.getQuote('SOL', tokenMint, smallAmount);
       
-      if (quoteResult.success) {
-        // Calculate price: outAmount tokens per smallAmount SOL
-        // Price = SOL per token = smallAmount / outTokens
-        const outTokens = parseFloat(quoteResult.outAmount);
-        if (outTokens > 0) {
-          const price = smallAmount / outTokens;
-          logger.debug(`Price for ${tokenMint}: ${price} SOL per token (buy direction)`);
-          return price;
-        }
+      if (!quoteResult.success) {
+        throw new Error(`Failed to get price: ${quoteResult.error}`);
       }
       
-      // If first direction fails, try reverse direction (selling the token)
-      // We'll try to sell 1 token to get a price estimate
-      const tokenAmount = 1;
-      quoteResult = await this.getQuote(tokenMint, 'SOL', tokenAmount);
+      // Calculate price: outAmount tokens per smallAmount SOL
+      // Price = SOL per token = smallAmount / outTokens
+      const outTokens = parseFloat(quoteResult.outAmount);
+      const price = smallAmount / outTokens;
       
-      if (quoteResult.success) {
-        // This directly gives us price in SOL
-        const price = parseFloat(quoteResult.outAmount);
-        logger.debug(`Price for ${tokenMint}: ${price} SOL per token (sell direction)`);
-        return price;
-      }
+      logger.debug(`Price for ${tokenMint}: ${price} SOL per token`);
       
-      throw new Error(`Failed to get price from both directions: ${quoteResult.error}`);
+      return price;
     } catch (error) {
       logger.error(`Error getting token price: ${error.message}`);
       // Return a negative value to indicate error

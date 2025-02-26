@@ -33,6 +33,17 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 // Set up session middleware
 bot.use(session());
 
+// Set up monitoring interval
+const MONITORING_UPDATE_INTERVAL = 60000; // 1 minute
+setInterval(async () => {
+  try {
+    // Update token prices and inform users of changes
+    await commands.updateMonitoredTokens(bot);
+  } catch (error) {
+    logger.error(`Error in monitoring update: ${error.message}`);
+  }
+}, MONITORING_UPDATE_INTERVAL);
+
 // Initialize session data for new users
 bot.use(async (ctx, next) => {
   if (!ctx.session) {
@@ -130,6 +141,19 @@ bot.action('dcaOrders', commands.handleDCAOrders);
 bot.action('referFriends', commands.handleReferFriends);
 bot.action('refresh', commands.handleRefresh);
 
+// Phantom wallet actions
+bot.action('deposit_phantom', commands.handleDepositPhantom);
+bot.action('withdraw_phantom', commands.handleWithdrawPhantom);
+bot.action('generate_qr', commands.handleGenerateQR);
+bot.action('copy_pay_link', commands.handleCopyPayLink);
+bot.action(/^withdraw_([0-9.]+)$/, (ctx) => commands.handleWithdrawalAmount(ctx, ctx.match[1]));
+bot.action(/^confirm_withdraw_(.+)$/, (ctx) => commands.handleConfirmWithdrawal(ctx, ctx.match[1]));
+
+// Order creation buttons
+bot.action('create_limit_buy', commands.handleCreateLimitBuy);
+bot.action('create_limit_sell', (ctx) => ctx.reply('Limit sell functionality coming soon!'));
+bot.action('create_dca', commands.handleCreateDCA);
+
 // BOOTSTRAP: Set up special action handlers
 // Trading setup actions
 bot.action(/^slippage_([0-9.]+)$/, (ctx) => commands.handleSlippageSelection(ctx, ctx.match[0]));
@@ -138,9 +162,83 @@ bot.action('skip_sl_tp', (ctx) => commands.handleStopLossTakeProfit(ctx, 'skip_s
 bot.action(/^force_buy_(.+)_([0-9.]+)_([0-9.]+)$/, (ctx) => commands.handleForceBuy(ctx, ctx.match[0]));
 bot.action('cancel_snipe', commands.handleCancelSnipe);
 
+// Monitor token alerts
+bot.action(/alert_(.+)/, async (ctx) => {
+  try {
+    const tokenAddress = ctx.match[1];
+    await commands.handleSetAlert(ctx, tokenAddress);
+  } catch (error) {
+    logger.error(`Error in alert action: ${error.message}`);
+    ctx.reply('Error setting alert. Please try again.');
+  }
+});
+
+// Stop monitoring token
+bot.action(/stop_monitor_(.+)/, async (ctx) => {
+  try {
+    const tokenAddress = ctx.match[1];
+    await commands.handleStopMonitoring(ctx, tokenAddress);
+  } catch (error) {
+    logger.error(`Error in stop monitoring action: ${error.message}`);
+    ctx.reply('Error stopping monitoring. Please try again.');
+  }
+});
+
 // BOOTSTRAP: Handle text input messages
 bot.on(message('text'), async (ctx) => {
   const text = ctx.message.text;
+  
+  // Handle the current user state if available
+  if (ctx.session.state) {
+    // Handle waiting for a token address for monitoring
+    if (ctx.session.state === 'WAITING_FOR_MONITOR_TOKEN') {
+      ctx.session.state = null; // Reset state
+      return commands.handleMonitorTokenInput(ctx, text);
+    }
+    
+    // Handle waiting for alert threshold
+    if (ctx.session.state === 'WAITING_FOR_ALERT_THRESHOLD' && ctx.session.alertSetup) {
+      ctx.session.state = null;
+      const { tokenAddress } = ctx.session.alertSetup;
+      delete ctx.session.alertSetup;
+      return commands.handleAlertThresholdInput(ctx, tokenAddress, text);
+    }
+    
+    // Handle waiting for withdrawal address
+    if (ctx.session.state === 'WAITING_FOR_WITHDRAW_ADDRESS') {
+      return commands.handleWithdrawAddressInput(ctx, text);
+    }
+    
+    // Handle waiting for a token address for limit buy
+    if (ctx.session.state === 'WAITING_FOR_LIMIT_BUY_TOKEN') {
+      return commands.handleLimitBuyTokenInput(ctx, text);
+    }
+    
+    // Handle waiting for limit buy price
+    if (ctx.session.state === 'WAITING_FOR_LIMIT_BUY_PRICE' && ctx.session.limitBuySetup) {
+      return commands.handleLimitBuyPriceInput(ctx, text);
+    }
+    
+    // Handle waiting for limit buy amount
+    if (ctx.session.state === 'WAITING_FOR_LIMIT_BUY_AMOUNT' && ctx.session.limitBuySetup) {
+      return commands.handleLimitBuyAmountInput(ctx, text);
+    }
+    
+    // Handle waiting for a token address for DCA
+    if (ctx.session.state === 'WAITING_FOR_DCA_TOKEN') {
+      return commands.handleDCATokenInput(ctx, text);
+    }
+    
+    // Handle waiting for DCA amount
+    if (ctx.session.state === 'WAITING_FOR_DCA_AMOUNT' && ctx.session.dcaSetup) {
+      return commands.handleDCAAmountInput(ctx, text);
+    }
+    
+    // Handle waiting for DCA interval
+    if (ctx.session.state === 'WAITING_FOR_DCA_INTERVAL' && ctx.session.dcaSetup) {
+      return commands.handleDCAIntervalInput(ctx, text);
+    }
+  }
   
   // Check if this is a token address (simplified check)
   if (text.length > 30 && text.match(/^[A-Za-z0-9]+$/)) {
@@ -193,7 +291,16 @@ async function registerBotCommands() {
 const initTradingComponents = async () => {
   try {
     logger.info('Initializing trading components');
-    const riskAnalyzer = new RiskAnalyzer();
+    
+    // Get connection and wallet from solanaClient
+    const connection = solanaClient.connection;
+    const wallet = solanaClient.walletManager;
+    
+    if (!connection) {
+      throw new Error('Solana connection not initialized');
+    }
+    
+    const riskAnalyzer = new RiskAnalyzer(connection);
     
     // Initialize position manager
     const positionManager = new PositionManager(connection, wallet);
@@ -208,11 +315,7 @@ const initTradingComponents = async () => {
     return { riskAnalyzer, tokenSniper, positionManager };
   } catch (error) {
     logger.error(`Error initializing trading components: ${error.message}`);
-    return { 
-      riskAnalyzer: new RiskAnalyzer(),
-      tokenSniper: new TokenSniper(connection, wallet, new RiskAnalyzer()),
-      positionManager: new PositionManager(connection, wallet)
-    };
+    throw error; // Rethrow the error to handle it in the startBot function
   }
 };
 
@@ -227,8 +330,42 @@ const startBot = async () => {
     // Register commands with Telegram
     await registerBotCommands();
     
-    // Initialize trading components (modify existing initialization)
-    const { riskAnalyzer, tokenSniper, positionManager } = await initTradingComponents();
+    // Initialize trading components with better error handling
+    let tradingComponents;
+    try {
+      tradingComponents = await initTradingComponents();
+      logger.info('Trading components initialized successfully');
+    } catch (error) {
+      logger.warn(`Error initializing trading components: ${error.message}`);
+      logger.warn('Starting bot with limited functionality');
+      
+      // Create fallback components with minimal functionality
+      const connection = solanaClient.connection || null;
+      const wallet = solanaClient.walletManager || { demoMode: true };
+      
+      tradingComponents = {
+        riskAnalyzer: new RiskAnalyzer(connection),
+        positionManager: new PositionManager(connection, wallet),
+        tokenSniper: null  // Will be created later if needed
+      };
+    }
+    
+    // Setup global components for command handlers to access
+    global.botComponents = tradingComponents;
+    
+    // Create token sniper if it doesn't exist yet
+    if (!tradingComponents.tokenSniper && tradingComponents.riskAnalyzer && tradingComponents.positionManager) {
+      const connection = solanaClient.connection;
+      const wallet = solanaClient.walletManager;
+      if (connection && wallet) {
+        tradingComponents.tokenSniper = new TokenSniper(
+          connection, 
+          wallet, 
+          tradingComponents.riskAnalyzer, 
+          tradingComponents.positionManager
+        );
+      }
+    }
     
     // Launch the bot with improved configuration
     await bot.launch({

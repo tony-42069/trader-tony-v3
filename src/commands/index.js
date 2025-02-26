@@ -143,6 +143,108 @@ const formatPositions = async (positions) => {
   }
 };
 
+/**
+ * Updates all monitored tokens and notifies users of significant changes
+ * @param {Object} bot - Telegram bot instance
+ */
+async function updateMonitoredTokens(bot) {
+  try {
+    // Get all active sessions
+    const sessions = Object.entries(bot.context.session || {});
+    for (const [userId, session] of sessions) {
+      if (!session || !session.monitoring) continue;
+      
+      // For each monitored token in the session
+      for (const [tokenAddress, tokenData] of Object.entries(session.monitoring)) {
+        try {
+          // Get current price from Jupiter
+          let currentPrice = -1;
+          if (solanaClient.jupiterClient) {
+            currentPrice = await solanaClient.jupiterClient.getTokenPrice(tokenAddress);
+          }
+          
+          // If we couldn't get a price, skip this update
+          if (currentPrice <= 0) continue;
+          
+          // Calculate price change percentage
+          const previousPrice = tokenData.lastPrice || tokenData.initialPrice;
+          const changePercent = previousPrice > 0 
+            ? ((currentPrice - previousPrice) / previousPrice) * 100 
+            : 0;
+          
+          // Update session data
+          tokenData.lastPrice = currentPrice;
+          tokenData.lastChecked = new Date();
+          
+          // Check for significant price change (>5%)
+          const significantChange = Math.abs(changePercent) >= 5;
+          
+          // Check for triggered alerts
+          const triggeredAlerts = [];
+          if (tokenData.alerts && tokenData.alerts.length > 0) {
+            tokenData.alerts.forEach(alert => {
+              if (alert.triggered) return;
+              
+              // Check if alert conditions are met
+              const isTriggered = 
+                (alert.condition === '>' && currentPrice > alert.threshold) ||
+                (alert.condition === '<' && currentPrice < alert.threshold);
+              
+              if (isTriggered) {
+                alert.triggered = true;
+                alert.triggeredAt = new Date();
+                triggeredAlerts.push(alert);
+              }
+            });
+          }
+          
+          // Only send a message if there's a significant change or triggered alert
+          if (significantChange || triggeredAlerts.length > 0) {
+            let message = `📊 *Token Update*\n\n`;
+            message += `Token: \`${tokenAddress}\`\n`;
+            message += `Current Price: ${currentPrice.toFixed(8)} SOL\n`;
+            
+            if (significantChange) {
+              const changeIcon = changePercent > 0 ? '📈' : '📉';
+              message += `${changeIcon} *${Math.abs(changePercent).toFixed(2)}%* ${changePercent > 0 ? 'increase' : 'decrease'} in the last hour\n`;
+            }
+            
+            // Add alert notifications
+            if (triggeredAlerts.length > 0) {
+              message += `\n⚠️ *Alerts Triggered:*\n`;
+              triggeredAlerts.forEach(alert => {
+                message += `• Price ${alert.condition === '>' ? 'above' : 'below'} ${alert.threshold.toFixed(8)} SOL\n`;
+              });
+            }
+            
+            // Add chart button
+            const keyboard = {
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    { text: '📈 Chart', url: `https://dexscreener.com/solana/${tokenAddress}` },
+                    { text: '❌ Stop Monitoring', callback_data: `stop_monitor_${tokenAddress}` }
+                  ]
+                ]
+              }
+            };
+            
+            // Send message to user
+            await bot.telegram.sendMessage(userId, message, {
+              parse_mode: 'Markdown',
+              ...keyboard
+            });
+          }
+        } catch (error) {
+          logger.error(`Error updating monitored token ${tokenAddress}: ${error.message}`);
+        }
+      }
+    }
+  } catch (error) {
+    logger.error(`Error in updateMonitoredTokens: ${error.message}`);
+  }
+}
+
 // Command handlers
 module.exports = {
   /**
@@ -332,11 +434,15 @@ module.exports = {
     try {
       await ctx.answerCbQuery();
       await ctx.reply(
-        `💳 Funding Options:\n\n` +
+        `💳 *Funding Options:*\n\n` +
         `To fund your account, send SOL to the following address:\n\n` +
-        `${ctx.session.wallet.address}\n\n` +
-        `Your current balance: ${ctx.session.wallet.balance} SOL`,
-        keyboards.mainKeyboard
+        `\`${ctx.session.wallet.address}\`\n\n` +
+        `Your current balance: ${ctx.session.wallet.balance} SOL\n\n` +
+        `Use the Phantom Wallet options below for easy deposits and withdrawals.`,
+        {
+          parse_mode: 'Markdown',
+          ...keyboards.fundKeyboard
+        }
       );
     } catch (error) {
       logger.error(`Error in handleFund: ${error.message}`);
@@ -351,12 +457,31 @@ module.exports = {
   handleMonitor: async (ctx) => {
     try {
       await ctx.answerCbQuery();
-      await ctx.reply(
-        `📊 Price Monitoring\n\n` +
-        `The monitoring feature is currently in demo mode.\n\n` +
-        `In the full version, you'll be able to monitor token prices, set alerts, and track market movements.`,
-        keyboards.mainKeyboard
-      );
+      
+      // Check if we have real monitoring capabilities
+      if (!solanaClient.readOnlyMode && solanaClient.demoMode) {
+        // Full demo mode with sample wallet
+        await ctx.reply(
+          `📊 Price Monitoring\n\n` +
+          `The monitoring feature is currently in demo mode.\n\n` +
+          `In the full version, you'll be able to monitor token prices, set alerts, and track market movements.`,
+          keyboards.mainKeyboard
+        );
+      } else {
+        // Real wallet in read-only mode or with private key
+        await ctx.reply(
+          `📊 *Price Monitoring*\n\n` +
+          `Enter a token address to start monitoring its price:\n\n` +
+          `Example: 9Cp3TginebPRG2zNK9Nz3MEKoGhgt6SM2VdGkubJpump`,
+          { 
+            parse_mode: 'Markdown',
+            ...keyboards.backToMainKeyboard 
+          }
+        );
+        
+        // Set user state to wait for token address
+        ctx.session.state = 'WAITING_FOR_MONITOR_TOKEN';
+      }
     } catch (error) {
       logger.error(`Error in handleMonitor: ${error.message}`);
       ctx.reply('Error accessing monitoring features. Please try again.');
@@ -370,12 +495,32 @@ module.exports = {
   handleLimitOrders: async (ctx) => {
     try {
       await ctx.answerCbQuery();
-      await ctx.reply(
-        `🎯 Limit Orders\n\n` +
-        `You have no active limit orders.\n\n` +
-        `This feature is currently in demo mode. In the full version, you'll be able to create limit buy and sell orders.`,
-        keyboards.mainKeyboard
-      );
+      
+      // Initialize if not already done
+      if (!ctx.session.limitOrders) {
+        ctx.session.limitOrders = [];
+      }
+      
+      if (ctx.session.limitOrders.length === 0) {
+        await ctx.reply(
+          `🎯 Limit Orders\n\n` +
+          `You have no active limit orders.\n\n` +
+          `To create a limit order, use the buttons below:`,
+          keyboards.limitOrderKeyboard
+        );
+      } else {
+        // Format the limit orders list
+        const ordersList = ctx.session.limitOrders.map((order, index) => {
+          return `${index + 1}. ${order.type.toUpperCase()} ${order.amount} SOL of ${order.tokenAddress.slice(0, 8)}... at ${order.price} SOL`;
+        }).join('\n');
+        
+        await ctx.reply(
+          `🎯 Your Limit Orders\n\n` +
+          ordersList + `\n\n` +
+          `To create a new limit order, use the buttons below:`,
+          keyboards.limitOrderKeyboard
+        );
+      }
     } catch (error) {
       logger.error(`Error in handleLimitOrders: ${error.message}`);
       ctx.reply('Error accessing limit orders. Please try again.');
@@ -450,12 +595,32 @@ module.exports = {
   handleDCAOrders: async (ctx) => {
     try {
       await ctx.answerCbQuery();
-      await ctx.reply(
-        `📋 DCA Orders\n\n` +
-        `You have no active DCA orders.\n\n` +
-        `This feature is currently in demo mode. In the full version, you'll be able to create dollar-cost averaging orders.`,
-        keyboards.mainKeyboard
-      );
+      
+      // Initialize if not already done
+      if (!ctx.session.dcaOrders) {
+        ctx.session.dcaOrders = [];
+      }
+      
+      if (ctx.session.dcaOrders.length === 0) {
+        await ctx.reply(
+          `📋 DCA Orders\n\n` +
+          `You have no active DCA orders.\n\n` +
+          `To create a dollar-cost averaging order, use the button below:`,
+          keyboards.dcaOrderKeyboard
+        );
+      } else {
+        // Format the DCA orders list
+        const ordersList = ctx.session.dcaOrders.map((order, index) => {
+          return `${index + 1}. Buy ${order.amount} SOL of ${order.tokenAddress.slice(0, 8)}... every ${order.interval} hours`;
+        }).join('\n');
+        
+        await ctx.reply(
+          `📋 Your DCA Orders\n\n` +
+          ordersList + `\n\n` +
+          `To create a new DCA order, use the button below:`,
+          keyboards.dcaOrderKeyboard
+        );
+      }
     } catch (error) {
       logger.error(`Error in handleDCAOrders: ${error.message}`);
       ctx.reply('Error accessing DCA orders. Please try again.');
@@ -874,5 +1039,921 @@ module.exports = {
       ctx.reply('Error processing snipe command. Please try again.', keyboards.mainKeyboard);
     }
   },
-  handlePositions
+  handlePositions,
+  
+  /**
+   * Handle token address input for monitoring
+   * @param {Object} ctx - Telegram context
+   * @param {string} tokenAddress - Token address to monitor
+   */
+  handleMonitorTokenInput: async (ctx, tokenAddress) => {
+    try {
+      // Send initial message
+      await ctx.reply(`Analyzing token for monitoring: ${tokenAddress}...`);
+      
+      // Validate the token
+      const riskAnalysis = await solanaClient.analyzeTokenRisk(tokenAddress);
+      
+      // Get initial price information
+      let tokenInfo;
+      try {
+        // First get standard token info
+        tokenInfo = await solanaClient.getTokenInfo(tokenAddress);
+        
+        // Then try to get price from Jupiter
+        if (solanaClient.jupiterClient) {
+          const price = await solanaClient.jupiterClient.getTokenPrice(tokenAddress);
+          if (price > 0) {
+            tokenInfo.price = price;
+          }
+        }
+      } catch (error) {
+        logger.error(`Error getting token info: ${error.message}`);
+        tokenInfo = { 
+          address: tokenAddress,
+          symbol: 'UNKNOWN', 
+          name: 'Unknown Token', 
+          decimals: 9,
+          price: 0 
+        };
+      }
+      
+      // Create monitoring entry in session
+      if (!ctx.session.monitoring) {
+        ctx.session.monitoring = {};
+      }
+      
+      // Store in session
+      ctx.session.monitoring[tokenAddress] = {
+        tokenAddress,
+        initialPrice: tokenInfo.price || 0,
+        lastPrice: tokenInfo.price || 0,
+        lastChecked: new Date(),
+        alerts: []
+      };
+      
+      // Display token information
+      let message = `📊 *Token Monitoring Started*\n\n`;
+      message += `Token: \`${tokenAddress}\`\n`;
+      
+      if (tokenInfo.name && tokenInfo.name !== tokenAddress) {
+        message += `Name: ${tokenInfo.name}\n`;
+      }
+      
+      if (tokenInfo.symbol && tokenInfo.symbol !== 'UNKNOWN') {
+        message += `Symbol: ${tokenInfo.symbol}\n`;
+      } else {
+        message += `Symbol: Unknown\n`;
+      }
+      
+      if (tokenInfo.price && tokenInfo.price > 0) {
+        message += `Current Price: ${tokenInfo.price.toFixed(8)} SOL\n`;
+      } else {
+        message += `Current Price: Unable to determine\n`;
+      }
+      
+      message += `\nRisk Level: ${riskAnalysis.riskLevel}%\n`;
+      
+      // Add warnings if any
+      if (riskAnalysis.warnings && riskAnalysis.warnings.length > 0) {
+        message += `\nWarnings:\n• ${riskAnalysis.warnings.join('\n• ')}\n`;
+      }
+      
+      message += `\nUse the buttons below to set alerts or stop monitoring:`;
+      
+      const monitoringKeyboard = {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '⏰ Set Price Alert', callback_data: `alert_${tokenAddress}` },
+              { text: '📈 Chart', url: `https://dexscreener.com/solana/${tokenAddress}` }
+            ],
+            [
+              { text: '❌ Stop Monitoring', callback_data: `stop_monitor_${tokenAddress}` },
+              { text: '« Back', callback_data: 'refresh' }
+            ]
+          ]
+        },
+        parse_mode: 'Markdown'
+      };
+      
+      await ctx.reply(message, monitoringKeyboard);
+    } catch (error) {
+      logger.error(`Error in handleMonitorTokenInput: ${error.message}`);
+      ctx.reply('Error monitoring token. Please try again with a valid token address.', keyboards.mainKeyboard);
+    }
+  },
+  
+  /**
+   * Handle setting a price alert for a monitored token
+   * @param {Object} ctx - Telegram context
+   * @param {string} tokenAddress - Token address to set alert for
+   */
+  handleSetAlert: async (ctx, tokenAddress) => {
+    try {
+      await ctx.answerCbQuery();
+      
+      // Check if token is being monitored
+      if (!ctx.session.monitoring || !ctx.session.monitoring[tokenAddress]) {
+        return ctx.reply('This token is not being monitored. Please start monitoring it first.');
+      }
+      
+      await ctx.reply(
+        `⏰ *Set Price Alert*\n\n` +
+        `Please enter the price threshold in SOL for ${tokenAddress.slice(0, 8)}...:\n\n` +
+        `Current price: ${ctx.session.monitoring[tokenAddress].lastPrice.toFixed(8)} SOL\n\n` +
+        `Format: [> or <][price]\n` +
+        `Examples:\n` +
+        `> 0.001 (Alert when price goes above 0.001 SOL)\n` +
+        `< 0.0005 (Alert when price goes below 0.0005 SOL)`,
+        { parse_mode: 'Markdown' }
+      );
+      
+      // Set state to waiting for alert threshold
+      ctx.session.state = 'WAITING_FOR_ALERT_THRESHOLD';
+      ctx.session.alertSetup = {
+        tokenAddress
+      };
+    } catch (error) {
+      logger.error(`Error in handleSetAlert: ${error.message}`);
+      ctx.reply('Error setting alert. Please try again.');
+    }
+  },
+  
+  /**
+   * Handle stopping monitoring for a token
+   * @param {Object} ctx - Telegram context
+   * @param {string} tokenAddress - Token address to stop monitoring
+   */
+  handleStopMonitoring: async (ctx, tokenAddress) => {
+    try {
+      await ctx.answerCbQuery();
+      
+      // Check if token is being monitored
+      if (!ctx.session.monitoring || !ctx.session.monitoring[tokenAddress]) {
+        return ctx.reply('This token is not being monitored.');
+      }
+      
+      // Remove from monitoring
+      delete ctx.session.monitoring[tokenAddress];
+      
+      await ctx.reply(
+        `✅ Stopped monitoring ${tokenAddress.slice(0, 8)}...`,
+        keyboards.mainKeyboard
+      );
+    } catch (error) {
+      logger.error(`Error in handleStopMonitoring: ${error.message}`);
+      ctx.reply('Error stopping monitoring. Please try again.');
+    }
+  },
+  
+  /**
+   * Handle alert threshold input
+   * @param {Object} ctx - Telegram context
+   * @param {string} tokenAddress - Token address to set alert for
+   * @param {string} thresholdInput - User input for alert threshold
+   */
+  handleAlertThresholdInput: async (ctx, tokenAddress, thresholdInput) => {
+    try {
+      // Check if token is being monitored
+      if (!ctx.session.monitoring || !ctx.session.monitoring[tokenAddress]) {
+        return ctx.reply('This token is not being monitored. Please start monitoring it first.');
+      }
+      
+      // Parse the threshold input
+      // Format should be "> price" or "< price"
+      const match = thresholdInput.trim().match(/^([<>])\s*([0-9.]+)$/);
+      if (!match) {
+        return ctx.reply(
+          '❌ Invalid format. Please use:\n\n' +
+          '`> price` for price increases\n' +
+          '`< price` for price decreases\n\n' +
+          'Example: `> 0.001` (Alert when price goes above 0.001 SOL)',
+          { parse_mode: 'Markdown' }
+        );
+      }
+      
+      const direction = match[1];
+      const threshold = parseFloat(match[2]);
+      
+      // Create the alert
+      const alert = {
+        id: Date.now().toString(),
+        direction,
+        threshold,
+        createdAt: Date.now()
+      };
+      
+      // Add to the monitored token's alerts
+      if (!ctx.session.monitoring[tokenAddress].alerts) {
+        ctx.session.monitoring[tokenAddress].alerts = [];
+      }
+      
+      ctx.session.monitoring[tokenAddress].alerts.push(alert);
+      
+      // Get current price for reference
+      const currentPrice = ctx.session.monitoring[tokenAddress].lastPrice || 'unknown';
+      
+      await ctx.reply(
+        `✅ Alert set successfully!\n\n` +
+        `You will be notified when the price of ${tokenAddress.slice(0, 8)}... goes ` +
+        `${direction === '>' ? 'above' : 'below'} ${threshold} SOL.\n\n` +
+        `Current price: ${currentPrice} SOL`,
+        keyboards.mainKeyboard
+      );
+    } catch (error) {
+      logger.error(`Error in handleAlertThresholdInput: ${error.message}`);
+      ctx.reply('Error setting alert threshold. Please try again.');
+    }
+  },
+  
+  /**
+   * Handle the Create Limit Buy button
+   * @param {Object} ctx - Telegram context
+   */
+  handleCreateLimitBuy: async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      
+      // Check if we can execute real transactions
+      if (solanaClient.demoMode || solanaClient.readOnlyMode) {
+        return ctx.reply(
+          `ℹ️ Limit Orders\n\n` +
+          `This feature requires a wallet with a private key to execute transactions.\n\n` +
+          `Currently the bot is in ${solanaClient.demoMode ? 'demo mode' : 'read-only mode'}. ` +
+          `To enable real trading, please update your .env file with your PRIVATE_KEY.`,
+          keyboards.backToMainKeyboard
+        );
+      }
+      
+      // Ask for token address
+      await ctx.reply(
+        `🎯 Create Limit Buy Order\n\n` +
+        `Enter the token address you want to buy:`,
+        { reply_markup: { force_reply: true } }
+      );
+      
+      // Set state to wait for token address
+      ctx.session.state = 'WAITING_FOR_LIMIT_BUY_TOKEN';
+    } catch (error) {
+      logger.error(`Error in handleCreateLimitBuy: ${error.message}`);
+      ctx.reply('Error creating limit buy. Please try again.');
+    }
+  },
+  
+  /**
+   * Handle limit buy token input
+   * @param {Object} ctx - Telegram context 
+   * @param {string} tokenAddress - Token address
+   */
+  handleLimitBuyTokenInput: async (ctx, tokenAddress) => {
+    try {
+      await ctx.reply(`Analyzing token: ${tokenAddress}...`);
+      
+      // Analyze token risk
+      const riskAnalysis = await solanaClient.analyzeTokenRisk(tokenAddress);
+      
+      // Format risk level message
+      let riskLevelEmoji = '✅';
+      let riskDescription = 'Low';
+      
+      if (riskAnalysis.riskLevel > 70) {
+        riskLevelEmoji = '🔴';
+        riskDescription = 'High';
+      } else if (riskAnalysis.riskLevel > 30) {
+        riskLevelEmoji = '🟠';
+        riskDescription = 'Medium';
+      }
+      
+      // Store token in session for next step
+      ctx.session.limitBuySetup = {
+        tokenAddress,
+        riskLevel: riskAnalysis.riskLevel
+      };
+      
+      // Update state
+      ctx.session.state = 'WAITING_FOR_LIMIT_BUY_PRICE';
+      
+      // Send analysis result and ask for price
+      let message = `${riskLevelEmoji} ${riskDescription} Risk Token (${riskAnalysis.riskLevel}%)\n\n`;
+      
+      if (riskAnalysis.warnings && riskAnalysis.warnings.length > 0) {
+        message += `Warnings:\n• ${riskAnalysis.warnings.join('\n• ')}\n\n`;
+      }
+      
+      message += `Token: ${tokenAddress}\n\n`;
+      message += `Enter the price (in SOL) at which you want to buy this token:`;
+      
+      await ctx.reply(message);
+    } catch (error) {
+      logger.error(`Error in handleLimitBuyTokenInput: ${error.message}`);
+      ctx.session.state = null;
+      ctx.reply('Error validating token. Please try again.');
+    }
+  },
+  
+  /**
+   * Handle limit buy price input
+   * @param {Object} ctx - Telegram context
+   * @param {string} priceText - Price input text
+   */
+  handleLimitBuyPriceInput: async (ctx, priceText) => {
+    try {
+      // Parse price input
+      const price = parseFloat(priceText);
+      
+      if (isNaN(price) || price <= 0) {
+        await ctx.reply('Invalid price. Please enter a valid positive number.');
+        return;
+      }
+      
+      // Store price in session
+      ctx.session.limitBuySetup.price = price;
+      
+      // Update state
+      ctx.session.state = 'WAITING_FOR_LIMIT_BUY_AMOUNT';
+      
+      // Ask for amount
+      await ctx.reply(
+        `How much SOL would you like to spend when this order executes?\n\n` +
+        `Current wallet balance: ${ctx.session.wallet.balance} SOL`
+      );
+    } catch (error) {
+      logger.error(`Error in handleLimitBuyPriceInput: ${error.message}`);
+      ctx.session.state = null;
+      ctx.reply('Error setting price. Please try again.');
+    }
+  },
+  
+  /**
+   * Handle limit buy amount input
+   * @param {Object} ctx - Telegram context
+   * @param {string} amountText - Amount input text
+   */
+  handleLimitBuyAmountInput: async (ctx, amountText) => {
+    try {
+      // Parse amount input
+      const amount = parseFloat(amountText);
+      
+      if (isNaN(amount) || amount <= 0) {
+        await ctx.reply('Invalid amount. Please enter a valid positive number.');
+        return;
+      }
+      
+      // Complete setup
+      const limitBuyOrder = {
+        id: `limit_${Date.now()}`,
+        type: 'buy',
+        tokenAddress: ctx.session.limitBuySetup.tokenAddress,
+        price: ctx.session.limitBuySetup.price,
+        amount: amount,
+        createdAt: new Date(),
+        status: 'active'
+      };
+      
+      // Initialize limit orders if not exist
+      if (!ctx.session.limitOrders) {
+        ctx.session.limitOrders = [];
+      }
+      
+      // Add to limit orders
+      ctx.session.limitOrders.push(limitBuyOrder);
+      
+      // Reset state
+      ctx.session.state = null;
+      delete ctx.session.limitBuySetup;
+      
+      // Confirm order
+      await ctx.reply(
+        `✅ Limit Buy Order Created\n\n` +
+        `Token: ${limitBuyOrder.tokenAddress.substring(0, 8)}...\n` +
+        `Price: ${limitBuyOrder.price} SOL\n` +
+        `Amount: ${limitBuyOrder.amount} SOL\n\n` +
+        `Your order will execute automatically when the token reaches the target price.`,
+        keyboards.mainKeyboard
+      );
+    } catch (error) {
+      logger.error(`Error in handleLimitBuyAmountInput: ${error.message}`);
+      ctx.session.state = null;
+      ctx.reply('Error creating limit order. Please try again.');
+    }
+  },
+  
+  /**
+   * Handle the Create DCA Order button
+   * @param {Object} ctx - Telegram context
+   */
+  handleCreateDCA: async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      
+      // Check if we can execute real transactions
+      if (solanaClient.demoMode || solanaClient.readOnlyMode) {
+        return ctx.reply(
+          `ℹ️ DCA Orders\n\n` +
+          `This feature requires a wallet with a private key to execute transactions.\n\n` +
+          `Currently the bot is in ${solanaClient.demoMode ? 'demo mode' : 'read-only mode'}. ` +
+          `To enable real trading, please update your .env file with your PRIVATE_KEY.`,
+          keyboards.backToMainKeyboard
+        );
+      }
+      
+      // Ask for token address
+      await ctx.reply(
+        `📋 Create DCA Order\n\n` +
+        `Enter the token address you want to periodically buy:`,
+        { reply_markup: { force_reply: true } }
+      );
+      
+      // Set state to wait for token address
+      ctx.session.state = 'WAITING_FOR_DCA_TOKEN';
+    } catch (error) {
+      logger.error(`Error in handleCreateDCA: ${error.message}`);
+      ctx.reply('Error creating DCA order. Please try again.');
+    }
+  },
+  
+  /**
+   * Handle DCA token input
+   * @param {Object} ctx - Telegram context
+   * @param {string} tokenAddress - Token address
+   */
+  handleDCATokenInput: async (ctx, tokenAddress) => {
+    try {
+      await ctx.reply(`Analyzing token: ${tokenAddress}...`);
+      
+      // Analyze token risk
+      const riskAnalysis = await solanaClient.analyzeTokenRisk(tokenAddress);
+      
+      // Format risk level message
+      let riskLevelEmoji = '✅';
+      let riskDescription = 'Low';
+      
+      if (riskAnalysis.riskLevel > 70) {
+        riskLevelEmoji = '🔴';
+        riskDescription = 'High';
+      } else if (riskAnalysis.riskLevel > 30) {
+        riskLevelEmoji = '🟠';
+        riskDescription = 'Medium';
+      }
+      
+      // Store token in session for next step
+      ctx.session.dcaSetup = {
+        tokenAddress,
+        riskLevel: riskAnalysis.riskLevel
+      };
+      
+      // Update state
+      ctx.session.state = 'WAITING_FOR_DCA_AMOUNT';
+      
+      // Send analysis result and ask for amount
+      let message = `${riskLevelEmoji} ${riskDescription} Risk Token (${riskAnalysis.riskLevel}%)\n\n`;
+      
+      if (riskAnalysis.warnings && riskAnalysis.warnings.length > 0) {
+        message += `Warnings:\n• ${riskAnalysis.warnings.join('\n• ')}\n\n`;
+      }
+      
+      message += `Token: ${tokenAddress}\n\n`;
+      message += `How much SOL would you like to spend in each purchase?`;
+      
+      await ctx.reply(message);
+    } catch (error) {
+      logger.error(`Error in handleDCATokenInput: ${error.message}`);
+      ctx.session.state = null;
+      ctx.reply('Error validating token. Please try again.');
+    }
+  },
+  
+  /**
+   * Handle DCA amount input
+   * @param {Object} ctx - Telegram context
+   * @param {string} amountText - Amount input text
+   */
+  handleDCAAmountInput: async (ctx, amountText) => {
+    try {
+      // Parse amount input
+      const amount = parseFloat(amountText);
+      
+      if (isNaN(amount) || amount <= 0) {
+        await ctx.reply('Invalid amount. Please enter a valid positive number.');
+        return;
+      }
+      
+      // Store amount in session
+      ctx.session.dcaSetup.amount = amount;
+      
+      // Update state
+      ctx.session.state = 'WAITING_FOR_DCA_INTERVAL';
+      
+      // Ask for interval
+      await ctx.reply(
+        `How often would you like to buy this token? (in hours)\n\n` +
+        `Examples:\n` +
+        `24 - Once a day\n` +
+        `168 - Once a week\n` +
+        `720 - Once a month`
+      );
+    } catch (error) {
+      logger.error(`Error in handleDCAAmountInput: ${error.message}`);
+      ctx.session.state = null;
+      ctx.reply('Error setting amount. Please try again.');
+    }
+  },
+  
+  /**
+   * Handle DCA interval input
+   * @param {Object} ctx - Telegram context
+   * @param {string} intervalText - Interval input text
+   */
+  handleDCAIntervalInput: async (ctx, intervalText) => {
+    try {
+      // Parse interval input
+      const interval = parseInt(intervalText);
+      
+      if (isNaN(interval) || interval <= 0) {
+        await ctx.reply('Invalid interval. Please enter a valid positive number.');
+        return;
+      }
+      
+      // Complete setup
+      const dcaOrder = {
+        id: `dca_${Date.now()}`,
+        tokenAddress: ctx.session.dcaSetup.tokenAddress,
+        amount: ctx.session.dcaSetup.amount,
+        interval: interval,
+        nextExecution: Date.now() + interval * 3600000, // Convert hours to milliseconds
+        createdAt: new Date(),
+        status: 'active'
+      };
+      
+      // Initialize DCA orders if not exist
+      if (!ctx.session.dcaOrders) {
+        ctx.session.dcaOrders = [];
+      }
+      
+      // Add to DCA orders
+      ctx.session.dcaOrders.push(dcaOrder);
+      
+      // Reset state
+      ctx.session.state = null;
+      delete ctx.session.dcaSetup;
+      
+      // Confirm order
+      await ctx.reply(
+        `✅ DCA Order Created\n\n` +
+        `Token: ${dcaOrder.tokenAddress.substring(0, 8)}...\n` +
+        `Amount: ${dcaOrder.amount} SOL\n` +
+        `Interval: Every ${dcaOrder.interval} hours\n\n` +
+        `Your first purchase will execute in ${dcaOrder.interval} hours.`,
+        keyboards.mainKeyboard
+      );
+    } catch (error) {
+      logger.error(`Error in handleDCAIntervalInput: ${error.message}`);
+      ctx.session.state = null;
+      ctx.reply('Error creating DCA order. Please try again.');
+    }
+  },
+  
+  // Phantom wallet handlers
+  /**
+   * Handle deposit from Phantom button
+   * @param {Object} ctx - Telegram context
+   */
+  handleDepositPhantom: async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      
+      // Get wallet address
+      const walletAddress = solanaClient.getWalletAddress();
+      
+      if (!walletAddress) {
+        return ctx.reply('No wallet address available. Please set up a wallet first.');
+      }
+      
+      await ctx.reply(
+        `💳 *Deposit from Phantom Wallet*\n\n` +
+        `Transfer SOL from your Phantom wallet to fund this bot.\n\n` +
+        `Wallet address: \`${walletAddress}\`\n\n` +
+        `Use the options below to generate a Solana Pay link or QR code for easy transfer.`,
+        {
+          parse_mode: 'Markdown',
+          ...keyboards.phantomDepositKeyboard
+        }
+      );
+    } catch (error) {
+      logger.error(`Error in handleDepositPhantom: ${error.message}`);
+      ctx.reply('Error setting up Phantom deposit. Please try again.');
+    }
+  },
+  
+  /**
+   * Handle generate QR code button
+   * @param {Object} ctx - Telegram context
+   */
+  handleGenerateQR: async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      
+      // Send loading message
+      const loadingMsg = await ctx.reply('Generating QR code...');
+      
+      // Get wallet address
+      const walletAddress = solanaClient.getWalletAddress();
+      
+      if (!walletAddress) {
+        return ctx.reply('No wallet address available. Please set up a wallet first.');
+      }
+      
+      // Generate Solana Pay URL
+      const transferRequest = solanaClient.phantomConnectManager.generateTransferRequestURL(
+        walletAddress,
+        null, // Let user decide amount
+        null,
+        'TraderTony Bot Deposit',
+        'Fund your trading bot'
+      );
+      
+      // Generate QR code
+      const qrCode = await solanaClient.phantomConnectManager.generateQRCode(transferRequest.url);
+      
+      // Delete loading message
+      await ctx.telegram.deleteMessage(ctx.chat.id, loadingMsg.message_id);
+      
+      // Send QR code with instructions
+      await ctx.replyWithPhoto(
+        { source: Buffer.from(qrCode.split(',')[1], 'base64') },
+        {
+          caption: `📱 *Scan with Phantom Wallet*\n\n` +
+                  `Scan this QR code with your Phantom wallet to deposit SOL to your trading bot.\n\n` +
+                  `Wallet address: \`${walletAddress}\``,
+          parse_mode: 'Markdown',
+          ...keyboards.phantomDepositKeyboard
+        }
+      );
+      
+      // Store reference in session for monitoring
+      ctx.session.pendingDeposit = {
+        reference: transferRequest.reference,
+        timestamp: Date.now()
+      };
+      
+    } catch (error) {
+      logger.error(`Error in handleGenerateQR: ${error.message}`);
+      ctx.reply('Error generating QR code. Please try again.');
+    }
+  },
+  
+  /**
+   * Handle copy pay link button
+   * @param {Object} ctx - Telegram context
+   */
+  handleCopyPayLink: async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      
+      // Get wallet address
+      const walletAddress = solanaClient.getWalletAddress();
+      
+      if (!walletAddress) {
+        return ctx.reply('No wallet address available. Please set up a wallet first.');
+      }
+      
+      // Generate Solana Pay URL
+      const transferRequest = solanaClient.phantomConnectManager.generateTransferRequestURL(
+        walletAddress,
+        null, // Let user decide amount
+        null,
+        'TraderTony Bot Deposit',
+        'Fund your trading bot'
+      );
+      
+      // Send URL to user
+      await ctx.reply(
+        `🔗 *Solana Pay Link*\n\n` +
+        `Use this link to deposit SOL from your Phantom wallet:\n\n` +
+        `\`${transferRequest.url}\`\n\n` +
+        `Click the link to open in Phantom or copy it to your clipboard.`,
+        {
+          parse_mode: 'Markdown',
+          ...keyboards.phantomDepositKeyboard
+        }
+      );
+      
+      // Store reference in session for monitoring
+      ctx.session.pendingDeposit = {
+        reference: transferRequest.reference,
+        timestamp: Date.now()
+      };
+      
+    } catch (error) {
+      logger.error(`Error in handleCopyPayLink: ${error.message}`);
+      ctx.reply('Error generating Solana Pay link. Please try again.');
+    }
+  },
+  
+  /**
+   * Handle withdraw to Phantom button
+   * @param {Object} ctx - Telegram context
+   */
+  handleWithdrawPhantom: async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      
+      // Check if we can execute real transactions
+      if (solanaClient.demoMode) {
+        return ctx.reply(
+          `⚠️ *Withdraw to Phantom*\n\n` +
+          `This feature requires a wallet with a private key to execute transactions.\n\n` +
+          `Currently the bot is in demo mode. To enable real transactions, please update your .env file with your PRIVATE_KEY.`,
+          {
+            parse_mode: 'Markdown',
+            ...keyboards.backToMainKeyboard
+          }
+        );
+      }
+      
+      // Get current wallet balance
+      const balance = await solanaClient.getBalance();
+      
+      await ctx.reply(
+        `💸 *Withdraw to Phantom Wallet*\n\n` +
+        `Current balance: ${balance} SOL\n\n` +
+        `Select an amount to withdraw or enter a custom amount:`,
+        {
+          parse_mode: 'Markdown',
+          ...keyboards.phantomWithdrawKeyboard
+        }
+      );
+      
+      // Set state to wait for withdrawal address
+      ctx.session.state = 'WAITING_FOR_WITHDRAW_ADDRESS';
+      
+    } catch (error) {
+      logger.error(`Error in handleWithdrawPhantom: ${error.message}`);
+      ctx.reply('Error setting up Phantom withdrawal. Please try again.');
+    }
+  },
+  
+  /**
+   * Handle withdrawal amount selection
+   * @param {Object} ctx - Telegram context
+   * @param {string} amount - Amount to withdraw (e.g., '0.1')
+   */
+  handleWithdrawalAmount: async (ctx, amount) => {
+    try {
+      await ctx.answerCbQuery();
+      
+      // Check for valid amount
+      const withdrawAmount = parseFloat(amount);
+      if (isNaN(withdrawAmount) || withdrawAmount <= 0) {
+        return ctx.reply('Invalid withdrawal amount. Please try again.');
+      }
+      
+      // Check if we have enough balance
+      const balance = await solanaClient.getBalance();
+      if (withdrawAmount > balance) {
+        return ctx.reply(`Insufficient balance. You only have ${balance} SOL available.`);
+      }
+      
+      // Ask for recipient address
+      await ctx.reply(
+        `🔍 *Enter Recipient Address*\n\n` +
+        `Please enter the Phantom wallet address to withdraw ${withdrawAmount} SOL to:`,
+        { parse_mode: 'Markdown' }
+      );
+      
+      // Store amount and set state
+      ctx.session.withdrawAmount = withdrawAmount;
+      ctx.session.state = 'WAITING_FOR_WITHDRAW_ADDRESS';
+      
+    } catch (error) {
+      logger.error(`Error in handleWithdrawalAmount: ${error.message}`);
+      ctx.reply('Error processing withdrawal amount. Please try again.');
+    }
+  },
+  
+  /**
+   * Handle withdraw address input
+   * @param {Object} ctx - Telegram context
+   * @param {string} address - Recipient address
+   */
+  handleWithdrawAddressInput: async (ctx, address) => {
+    try {
+      // Validate the address
+      try {
+        new solanaClient.connection.constructor.PublicKey(address);
+      } catch (error) {
+        return ctx.reply('Invalid Solana address. Please enter a valid address.');
+      }
+      
+      // Send confirmation message
+      await ctx.reply(
+        `⚠️ *Confirm Withdrawal*\n\n` +
+        `You are about to withdraw ${ctx.session.withdrawAmount} SOL to:\n` +
+        `\`${address}\`\n\n` +
+        `Are you sure you want to proceed?`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '✅ Confirm', callback_data: `confirm_withdraw_${address}` },
+                { text: '❌ Cancel', callback_data: 'fund' }
+              ]
+            ]
+          }
+        }
+      );
+      
+      // Reset state
+      ctx.session.state = null;
+      
+    } catch (error) {
+      logger.error(`Error in handleWithdrawAddressInput: ${error.message}`);
+      ctx.reply('Error processing withdrawal address. Please try again.');
+      ctx.session.state = null;
+    }
+  },
+  
+  /**
+   * Handle withdrawal confirmation
+   * @param {Object} ctx - Telegram context
+   * @param {string} address - Recipient address
+   */
+  handleConfirmWithdrawal: async (ctx, address) => {
+    try {
+      await ctx.answerCbQuery();
+      
+      // Check if withdrawal amount is set
+      if (!ctx.session.withdrawAmount) {
+        return ctx.reply('Withdrawal amount not set. Please start over.');
+      }
+      
+      // Send processing message
+      const processingMsg = await ctx.reply('Processing withdrawal...');
+      
+      // Generate and execute withdrawal transaction
+      try {
+        // Generate transaction
+        const transaction = await solanaClient.phantomConnectManager.generateWithdrawalTransaction(
+          address,
+          ctx.session.withdrawAmount
+        );
+        
+        // Execute transaction
+        const txResult = await solanaClient.transactionUtility.sendTransaction(transaction);
+        
+        // Delete processing message
+        await ctx.telegram.deleteMessage(ctx.chat.id, processingMsg.message_id);
+        
+        if (txResult.success) {
+          // Send success message
+          await ctx.reply(
+            `✅ *Withdrawal Successful*\n\n` +
+            `Successfully withdrew ${ctx.session.withdrawAmount} SOL to:\n` +
+            `\`${address}\`\n\n` +
+            `Transaction ID: \`${txResult.signature}\``,
+            {
+              parse_mode: 'Markdown',
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    { text: '🔍 View on Solscan', url: `https://solscan.io/tx/${txResult.signature}` }
+                  ],
+                  [
+                    { text: '« Back to Main Menu', callback_data: 'refresh' }
+                  ]
+                ]
+              }
+            }
+          );
+        } else {
+          throw new Error(txResult.error || 'Unknown error');
+        }
+      } catch (error) {
+        // Delete processing message
+        await ctx.telegram.deleteMessage(ctx.chat.id, processingMsg.message_id);
+        
+        // Send error message
+        await ctx.reply(
+          `❌ *Withdrawal Failed*\n\n` +
+          `Error: ${error.message}\n\n` +
+          `Please try again later.`,
+          {
+            parse_mode: 'Markdown',
+            ...keyboards.backToMainKeyboard
+          }
+        );
+      }
+      
+      // Clear withdrawal data
+      delete ctx.session.withdrawAmount;
+      
+    } catch (error) {
+      logger.error(`Error in handleConfirmWithdrawal: ${error.message}`);
+      ctx.reply('Error processing withdrawal. Please try again.');
+    }
+  },
+  
+  updateMonitoredTokens
 };

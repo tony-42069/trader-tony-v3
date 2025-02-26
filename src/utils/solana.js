@@ -8,6 +8,8 @@ const TokenSniper = require('../trading/sniper');
 const RiskAnalyzer = require('../trading/risk-analyzer');
 const PositionManager = require('../trading/position-manager');
 const axios = require('axios');
+const JupiterClient = require('../trading/jupiter-client');
+const PhantomConnectManager = require('./phantom');
 
 class SolanaClient {
   constructor() {
@@ -17,8 +19,11 @@ class SolanaClient {
     this.tokenSniper = null;
     this.riskAnalyzer = null;
     this.positionManager = null;
+    this.jupiterClient = null;
+    this.phantomConnectManager = null;
     this.initialized = false;
     this.demoMode = false;
+    this.readOnlyMode = false;
     this.demoWalletAddress = null;
   }
 
@@ -52,9 +57,30 @@ class SolanaClient {
           logger.info('Falling back to demo mode due to wallet initialization failure');
         }
       } else {
-        // No private key provided, use demo mode
-        this.demoMode = true;
-        logger.info('No private key provided, using demo mode');
+        // No private key provided, use specified wallet address if available, otherwise use demo mode
+        if (process.env.WALLET_ADDRESS) {
+          // Using real wallet address but in read-only mode (can't sign transactions)
+          this.demoMode = true; // Still demo mode since we can't make real transactions
+          this.readOnlyMode = true; // But we're using a real wallet, so some features can work
+          this.demoWalletAddress = process.env.WALLET_ADDRESS;
+          logger.info(`Using real wallet address in read-only mode: ${this.demoWalletAddress}`);
+          
+          // Validate the wallet address
+          try {
+            new PublicKey(this.demoWalletAddress);
+          } catch (error) {
+            logger.error(`Invalid wallet address: ${error.message}`);
+            this.demoWalletAddress = process.env.DEMO_WALLET_ADDRESS || '2PS57B26Sh5Xa22dPSEt9bRgP5FhNsoyFvGUV8t5X232';
+            this.readOnlyMode = false; // Back to full demo mode
+            logger.info(`Falling back to demo wallet address: ${this.demoWalletAddress}`);
+          }
+        } else {
+          // No wallet address specified, use demo mode
+          this.demoMode = true;
+          this.readOnlyMode = false;
+          this.demoWalletAddress = process.env.DEMO_WALLET_ADDRESS || '2PS57B26Sh5Xa22dPSEt9bRgP5FhNsoyFvGUV8t5X232';
+          logger.info('No private key or wallet address provided, using demo mode');
+        }
       }
       
       // Initialize risk analyzer
@@ -71,10 +97,13 @@ class SolanaClient {
       );
       
       // Initialize position manager
-      this.positionManager = new PositionManager(
-        this.connection,
-        this.walletManager
-      );
+      this.positionManager = new PositionManager(this.connection, this.walletManager);
+      
+      // Create Jupiter client for DEX integration
+      this.jupiterClient = new JupiterClient(this.connection);
+      
+      // Initialize Phantom Connect manager
+      this.phantomConnectManager = new PhantomConnectManager(this);
       
       // Set up position manager event listeners
       this.setupPositionEventListeners();
@@ -247,12 +276,24 @@ class SolanaClient {
     }
     
     try {
-      // If in demo mode, return a mock balance
-      if (this.demoMode) {
+      // If in demo mode but NOT in read-only mode, return a mock balance
+      if (this.demoMode && !this.readOnlyMode) {
         return 4.2; // Mock balance for demo
       }
       
-      // Get real balance from wallet manager
+      // In read-only mode with real wallet, fetch actual balance from blockchain
+      if (this.readOnlyMode && this.demoWalletAddress) {
+        try {
+          const pubkey = new PublicKey(this.demoWalletAddress);
+          const balance = await this.connection.getBalance(pubkey);
+          return balance / LAMPORTS_PER_SOL; // Convert from lamports to SOL
+        } catch (err) {
+          logger.error(`Error fetching real balance in read-only mode: ${err.message}`);
+          return 4.2; // Fallback to mock if there's an error
+        }
+      }
+      
+      // Get real balance from wallet manager (for fully authenticated wallet)
       return await this.walletManager.getBalance();
     } catch (error) {
       logger.error(`Error getting balance: ${error.message}`);
@@ -270,8 +311,8 @@ class SolanaClient {
     }
     
     try {
-      // If in demo mode, return mock token balances
-      if (this.demoMode) {
+      // If in full demo mode (not read-only), return mock token balances
+      if (this.demoMode && !this.readOnlyMode) {
         return [
           {
             mint: 'So11111111111111111111111111111111111111112',
@@ -290,7 +331,61 @@ class SolanaClient {
         ];
       }
       
-      // Get real token balances from wallet manager
+      // In read-only mode with real wallet, fetch actual token balances
+      if (this.readOnlyMode && this.demoWalletAddress) {
+        try {
+          const pubkey = new PublicKey(this.demoWalletAddress);
+          
+          // Get SOL balance
+          const solBalance = await this.connection.getBalance(pubkey);
+          const solBalanceInSol = solBalance / LAMPORTS_PER_SOL;
+          
+          // Get token accounts
+          const tokenAccounts = await this.connection.getParsedTokenAccountsByOwner(
+            pubkey,
+            { programId: new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA') }
+          );
+          
+          // Format token balances
+          const tokens = tokenAccounts.value.map(tokenAccount => {
+            const accountData = tokenAccount.account.data.parsed.info;
+            const tokenBalance = accountData.tokenAmount;
+            
+            return {
+              mint: accountData.mint,
+              balance: tokenBalance.uiAmount,
+              decimals: tokenBalance.decimals,
+              symbol: 'Unknown', // We would need to fetch token metadata for this
+              name: 'Unknown Token'
+            };
+          });
+          
+          // Add SOL to the list
+          tokens.unshift({
+            mint: 'So11111111111111111111111111111111111111112',
+            balance: solBalanceInSol,
+            decimals: 9,
+            symbol: 'SOL',
+            name: 'Solana'
+          });
+          
+          return tokens;
+        } catch (err) {
+          logger.error(`Error fetching token balances in read-only mode: ${err.message}`);
+          // Fall back to mock data if there's an error
+          return [
+            {
+              mint: 'So11111111111111111111111111111111111111112',
+              balance: 4.2,
+              decimals: 9,
+              symbol: 'SOL',
+              name: 'Solana'
+            }
+          ];
+        }
+      }
+      
+      // Get real token balances from wallet manager (for fully authenticated wallet)
       return await this.walletManager.getTokenBalances();
     } catch (error) {
       logger.error(`Error getting token balances: ${error.message}`);
