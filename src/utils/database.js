@@ -127,6 +127,116 @@ class Database {
       return defaultValue;
     }
   }
+
+  /**
+   * Save AutoTrader strategies to disk
+   * @param {Array} strategies - Array of trading strategies
+   * @returns {boolean} Success status
+   */
+  saveAutoTraderStrategies(strategies) {
+    return this.saveData('autotrader-strategies', strategies);
+  }
+
+  /**
+   * Load AutoTrader strategies from disk
+   * @returns {Array} Array of trading strategies
+   */
+  loadAutoTraderStrategies() {
+    const strategies = this.loadData('autotrader-strategies', []);
+    
+    // Restore Date objects
+    strategies.forEach(strategy => {
+      if (strategy.createdAt) strategy.createdAt = new Date(strategy.createdAt);
+      if (strategy.lastRun) strategy.lastRun = new Date(strategy.lastRun);
+    });
+    
+    return strategies;
+  }
+
+  /**
+   * Add a trade to the trading history
+   * @param {Object} trade - Trade data
+   * @returns {boolean} Success status
+   */
+  recordTrade(trade) {
+    try {
+      const filePath = path.join(this.dataDir, 'trading-history.json');
+      let history = [];
+      
+      // Load existing history if available
+      if (fs.existsSync(filePath)) {
+        const data = fs.readFileSync(filePath, 'utf8');
+        history = JSON.parse(data);
+      }
+      
+      // Add the new trade with timestamp
+      trade.timestamp = trade.timestamp || new Date();
+      history.push(trade);
+      
+      // Save updated history
+      fs.writeFileSync(
+        filePath,
+        JSON.stringify(history, null, 2)
+      );
+      
+      logger.info(`Recorded trade ${trade.id} in trading history`);
+      return true;
+    } catch (error) {
+      logger.error(`Failed to record trade: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Get trading history, optionally filtered by parameters
+   * @param {Object} filters - Filters to apply
+   * @returns {Array} Filtered trade history
+   */
+  getTradingHistory(filters = {}) {
+    try {
+      const filePath = path.join(this.dataDir, 'trading-history.json');
+      
+      if (!fs.existsSync(filePath)) {
+        return [];
+      }
+      
+      const data = fs.readFileSync(filePath, 'utf8');
+      let history = JSON.parse(data);
+      
+      // Convert timestamps to Date objects
+      history.forEach(trade => {
+        if (trade.timestamp) trade.timestamp = new Date(trade.timestamp);
+      });
+      
+      // Apply filters if provided
+      if (filters.strategyId) {
+        history = history.filter(trade => trade.strategyId === filters.strategyId);
+      }
+      
+      if (filters.tokenAddress) {
+        history = history.filter(trade => trade.tokenAddress === filters.tokenAddress);
+      }
+      
+      if (filters.startDate) {
+        const startDate = new Date(filters.startDate);
+        history = history.filter(trade => trade.timestamp >= startDate);
+      }
+      
+      if (filters.endDate) {
+        const endDate = new Date(filters.endDate);
+        history = history.filter(trade => trade.timestamp <= endDate);
+      }
+      
+      if (filters.success !== undefined) {
+        history = history.filter(trade => trade.success === filters.success);
+      }
+      
+      return history;
+    } catch (error) {
+      logger.error(`Failed to get trading history: ${error.message}`);
+      return [];
+    }
+  }
 }
 
 module.exports = new Database(); 

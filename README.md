@@ -10,6 +10,7 @@ TraderTony v3 is an advanced Telegram bot for Solana trading with powerful featu
 [![Telegram](https://img.shields.io/badge/Telegram-Bot-blue?logo=telegram)](https://telegram.org/)
 [![Phantom](https://img.shields.io/badge/Phantom-Integrated-purple?logo=phantom)](https://phantom.app/)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-green?logo=node.js)](https://nodejs.org/)
+[![AutoTrader](https://img.shields.io/badge/AutoTrader-24/7-orange)](https://github.com/tony-42069/trader-tony-v3)
 
 ## Features
 
@@ -42,6 +43,13 @@ TraderTony v3 is an advanced Telegram bot for Solana trading with powerful featu
   - Solana Pay integration
   - Easy withdrawals to Phantom wallet
   - Secure transaction signing
+
+- 🤖 **24/7 Autonomous Trading**
+  - Configure multiple trading strategies
+  - Automatic risk assessment and position sizing
+  - Set custom entry/exit conditions
+  - Event-based notifications
+  - Historical performance tracking
 
 ## Quick Start
 
@@ -97,6 +105,8 @@ TraderTony v3 is an advanced Telegram bot for Solana trading with powerful featu
 - `/start` - Start or restart the bot
 - `/help` - Display help information
 - `/balance` - Check your wallet balance
+- `/autotrader` - Manage autonomous trading strategies
+- `/addstrategy` - Create a new trading strategy
 
 ### Main Features
 
@@ -106,7 +116,7 @@ TraderTony v3 is an advanced Telegram bot for Solana trading with powerful featu
 - **Positions** - View current token positions and performance
 - **Wallet** - View wallet information and token holdings
 - **Settings** - Configure trading parameters and preferences
-- **DCA Orders** - Set up dollar-cost averaging strategies
+- **AutoTrader** - Configure and manage automated 24/7 trading strategies
 - **Phantom Connect** - Deposit and withdraw using Phantom wallet
 
 ## Implemented Features
@@ -119,6 +129,7 @@ TraderTony v3 is an advanced Telegram bot for Solana trading with powerful featu
 - ✅ Phantom wallet integration for deposits/withdrawals
 - ✅ Solana Pay and QR code generation
 - ✅ Real wallet connection with transaction signing
+- ✅ 24/7 Autonomous trading with custom strategies
 
 ## Development
 
@@ -134,6 +145,10 @@ trader-tony-v3/
 │   │   ├── jupiter.js  # Jupiter DEX integration
 │   │   └── solana.js   # Solana blockchain utilities
 │   ├── trading/        # Trading functionality
+│   │   ├── auto-trader.js  # Autonomous trading engine
+│   │   ├── position-manager.js  # Position management
+│   │   ├── risk-analyzer.js  # Risk analysis
+│   │   └── sniper.js  # Token sniping
 │   ├── index.js        # Main bot entry point
 │   └── reset-and-start.js  # Script to reset webhook and start bot
 ├── logs/               # Log files
@@ -153,4 +168,4 @@ MIT
 
 ## Disclaimer
 
-This software is for educational purposes only. Use at your own risk. 
+This software is for educational purposes only. Use at your own risk. Trading cryptocurrencies involves substantial risk and is not suitable for all investors. The autonomous trading feature should be used with caution and appropriate risk management. 

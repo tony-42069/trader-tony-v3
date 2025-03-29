@@ -245,6 +245,536 @@ async function updateMonitoredTokens(bot) {
   }
 }
 
+/**
+ * Handle autonomous trading commands
+ * @param {Object} ctx - Telegram context
+ */
+const handleAutoTrader = async (ctx) => {
+  try {
+    // Check if auto trader is available
+    const autoTrader = global.botComponents?.autoTrader;
+    if (!autoTrader) {
+      return ctx.reply('❌ AutoTrader is not available. Please try again later.');
+    }
+    
+    // Get auto trader status and stats
+    const isRunning = autoTrader.running;
+    const stats = autoTrader.getPerformanceStats();
+    const strategies = autoTrader.getAllStrategies();
+    
+    let message = `🤖 *AUTO TRADER STATUS*\n\n`;
+    message += `*Status:* ${isRunning ? '✅ RUNNING' : '❌ STOPPED'}\n`;
+    message += `*Active Strategies:* ${stats.activeStrategies}/${stats.strategyCount}\n`;
+    message += `*Total Trades:* ${stats.totalTrades}\n`;
+    
+    if (stats.totalTrades > 0) {
+      message += `*Success Rate:* ${stats.winRate.toFixed(2)}%\n`;
+      message += `*Total Profit:* ${stats.totalProfit.toFixed(4)} SOL\n\n`;
+    } else {
+      message += `\nNo trades executed yet.\n\n`;
+    }
+    
+    // List active strategies
+    if (strategies.length > 0) {
+      message += `*ACTIVE STRATEGIES:*\n`;
+      strategies.filter(s => s.enabled).forEach(strategy => {
+        message += `• ${strategy.name} - Budget: ${strategy.config.totalBudgetSOL} SOL\n`;
+      });
+    } else {
+      message += `No strategies configured yet. Add a strategy to start autonomous trading.`;
+    }
+    
+    return ctx.reply(message, {
+      parse_mode: 'Markdown',
+      ...keyboards.autoTraderKeyboard
+    });
+  } catch (error) {
+    logger.error(`Error in handleAutoTrader: ${error.message}`);
+    return ctx.reply('❌ Error retrieving AutoTrader status. Please try again later.');
+  }
+};
+
+/**
+ * Handle toggling the AutoTrader on/off
+ * @param {Object} ctx - Telegram context
+ */
+const handleToggleAutoTrader = async (ctx) => {
+  try {
+    // Check if auto trader is available
+    const autoTrader = global.botComponents?.autoTrader;
+    if (!autoTrader) {
+      return ctx.reply('❌ AutoTrader is not available. Please try again later.');
+    }
+    
+    let message = '';
+    
+    // Toggle auto trader state
+    if (autoTrader.running) {
+      autoTrader.stop();
+      message = '🛑 AutoTrader has been stopped. Autonomous trading is now disabled.';
+    } else {
+      const success = autoTrader.start();
+      if (success) {
+        message = '✅ AutoTrader has been started! Autonomous trading is now active.';
+      } else {
+        message = '❌ Failed to start AutoTrader. Check logs for details.';
+      }
+    }
+    
+    return ctx.reply(message, {
+      parse_mode: 'Markdown',
+      ...keyboards.autoTraderKeyboard
+    });
+  } catch (error) {
+    logger.error(`Error in handleToggleAutoTrader: ${error.message}`);
+    return ctx.reply('❌ Error toggling AutoTrader. Please try again later.');
+  }
+};
+
+/**
+ * Handle request to add a new trading strategy
+ * @param {Object} ctx - Telegram context
+ */
+const handleAddStrategy = async (ctx) => {
+  try {
+    // Update session state
+    ctx.session.state = 'WAITING_FOR_STRATEGY_NAME';
+    
+    return ctx.reply(
+      '📝 *Create New Trading Strategy*\n\n' +
+      'First, please enter a name for your strategy:',
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    logger.error(`Error in handleAddStrategy: ${error.message}`);
+    return ctx.reply('❌ Error setting up strategy creation. Please try again later.');
+  }
+};
+
+/**
+ * Handle strategy name input
+ * @param {Object} ctx - Telegram context
+ * @param {string} text - Input text
+ */
+const handleStrategyNameInput = async (ctx, text) => {
+  try {
+    // Initialize strategy setup in session
+    ctx.session.strategySetup = {
+      name: text.trim(),
+      // Default config values
+      maxPositionSizeSOL: 0.1,
+      totalBudgetSOL: 0.5,
+      stopLoss: 10,
+      takeProfit: 30
+    };
+    
+    // Update state for next input
+    ctx.session.state = 'WAITING_FOR_STRATEGY_BUDGET';
+    
+    return ctx.reply(
+      `Strategy name set to: "${text.trim()}"\n\n` +
+      'Now, please enter the total budget in SOL for this strategy:',
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    logger.error(`Error in handleStrategyNameInput: ${error.message}`);
+    ctx.session.state = null;
+    ctx.session.strategySetup = null;
+    return ctx.reply('❌ Error in strategy setup. Please try again later.');
+  }
+};
+
+/**
+ * Handle strategy budget input
+ * @param {Object} ctx - Telegram context
+ * @param {string} text - Input text
+ */
+const handleStrategyBudgetInput = async (ctx, text) => {
+  try {
+    // Parse budget as float
+    const budget = parseFloat(text.trim());
+    
+    if (isNaN(budget) || budget <= 0) {
+      return ctx.reply(
+        '❌ Invalid budget amount. Please enter a positive number:',
+        { parse_mode: 'Markdown' }
+      );
+    }
+    
+    // Update strategy setup
+    ctx.session.strategySetup.totalBudgetSOL = budget;
+    
+    // Update state for next input
+    ctx.session.state = 'WAITING_FOR_STRATEGY_POSITION_SIZE';
+    
+    return ctx.reply(
+      `Budget set to: ${budget} SOL\n\n` +
+      'Now, please enter the maximum position size in SOL for each trade:',
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    logger.error(`Error in handleStrategyBudgetInput: ${error.message}`);
+    ctx.session.state = null;
+    ctx.session.strategySetup = null;
+    return ctx.reply('❌ Error in strategy setup. Please try again later.');
+  }
+};
+
+/**
+ * Handle strategy position size input
+ * @param {Object} ctx - Telegram context
+ * @param {string} text - Input text
+ */
+const handleStrategyPositionSizeInput = async (ctx, text) => {
+  try {
+    // Parse position size as float
+    const positionSize = parseFloat(text.trim());
+    
+    if (isNaN(positionSize) || positionSize <= 0) {
+      return ctx.reply(
+        '❌ Invalid position size. Please enter a positive number:',
+        { parse_mode: 'Markdown' }
+      );
+    }
+    
+    // Check if position size is less than or equal to total budget
+    if (positionSize > ctx.session.strategySetup.totalBudgetSOL) {
+      return ctx.reply(
+        '❌ Position size cannot be larger than total budget. Please enter a smaller value:',
+        { parse_mode: 'Markdown' }
+      );
+    }
+    
+    // Update strategy setup
+    ctx.session.strategySetup.maxPositionSizeSOL = positionSize;
+    
+    // Update state for next input
+    ctx.session.state = 'WAITING_FOR_STRATEGY_STOPLOSS';
+    
+    return ctx.reply(
+      `Maximum position size set to: ${positionSize} SOL\n\n` +
+      'Now, please enter the default stop-loss percentage (e.g., 10 for 10%):',
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    logger.error(`Error in handleStrategyPositionSizeInput: ${error.message}`);
+    ctx.session.state = null;
+    ctx.session.strategySetup = null;
+    return ctx.reply('❌ Error in strategy setup. Please try again later.');
+  }
+};
+
+/**
+ * Handle strategy stop-loss input
+ * @param {Object} ctx - Telegram context
+ * @param {string} text - Input text
+ */
+const handleStrategyStopLossInput = async (ctx, text) => {
+  try {
+    // Parse stop-loss as float
+    const stopLoss = parseFloat(text.trim());
+    
+    if (isNaN(stopLoss) || stopLoss <= 0 || stopLoss >= 100) {
+      return ctx.reply(
+        '❌ Invalid stop-loss percentage. Please enter a number between 1 and 99:',
+        { parse_mode: 'Markdown' }
+      );
+    }
+    
+    // Update strategy setup
+    ctx.session.strategySetup.stopLoss = stopLoss;
+    
+    // Update state for next input
+    ctx.session.state = 'WAITING_FOR_STRATEGY_TAKEPROFIT';
+    
+    return ctx.reply(
+      `Stop-loss set to: ${stopLoss}%\n\n` +
+      'Finally, please enter the default take-profit percentage (e.g., 30 for 30%):',
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    logger.error(`Error in handleStrategyStopLossInput: ${error.message}`);
+    ctx.session.state = null;
+    ctx.session.strategySetup = null;
+    return ctx.reply('❌ Error in strategy setup. Please try again later.');
+  }
+};
+
+/**
+ * Handle strategy take-profit input and create the strategy
+ * @param {Object} ctx - Telegram context
+ * @param {string} text - Input text
+ */
+const handleStrategyTakeProfitInput = async (ctx, text) => {
+  try {
+    // Parse take-profit as float
+    const takeProfit = parseFloat(text.trim());
+    
+    if (isNaN(takeProfit) || takeProfit <= 0 || takeProfit >= 1000) {
+      return ctx.reply(
+        '❌ Invalid take-profit percentage. Please enter a positive number less than 1000:',
+        { parse_mode: 'Markdown' }
+      );
+    }
+    
+    // Update strategy setup
+    ctx.session.strategySetup.takeProfit = takeProfit;
+    
+    // Check if auto trader is available
+    const autoTrader = global.botComponents?.autoTrader;
+    if (!autoTrader) {
+      ctx.session.state = null;
+      ctx.session.strategySetup = null;
+      return ctx.reply('❌ AutoTrader is not available. Please try again later.');
+    }
+    
+    // Create the new strategy
+    const strategy = autoTrader.addStrategy(ctx.session.strategySetup);
+    
+    // Reset session state
+    ctx.session.state = null;
+    ctx.session.strategySetup = null;
+    
+    // Show confirmation
+    return ctx.reply(
+      `✅ *Strategy Created Successfully!*\n\n` +
+      `*Name:* ${strategy.name}\n` +
+      `*Budget:* ${strategy.config.totalBudgetSOL} SOL\n` +
+      `*Max Position Size:* ${strategy.config.maxPositionSizeSOL} SOL\n` +
+      `*Stop-Loss:* ${strategy.config.stopLoss}%\n` +
+      `*Take-Profit:* ${strategy.config.takeProfit}%\n\n` +
+      `Your strategy has been created and is now enabled. Use /autotrader to view and manage all your strategies.`,
+      { 
+        parse_mode: 'Markdown',
+        ...keyboards.autoTraderKeyboard
+      }
+    );
+  } catch (error) {
+    logger.error(`Error in handleStrategyTakeProfitInput: ${error.message}`);
+    ctx.session.state = null;
+    ctx.session.strategySetup = null;
+    return ctx.reply('❌ Error creating strategy. Please try again later.');
+  }
+};
+
+/**
+ * View strategies list
+ * @param {Object} ctx - Telegram context
+ */
+const handleViewStrategies = async (ctx) => {
+  try {
+    // Check if auto trader is available
+    const autoTrader = global.botComponents?.autoTrader;
+    if (!autoTrader) {
+      return ctx.reply('❌ AutoTrader is not available. Please try again later.');
+    }
+    
+    const strategies = autoTrader.getAllStrategies();
+    
+    if (strategies.length === 0) {
+      return ctx.reply(
+        '📊 *Trading Strategies*\n\n' +
+        'You have no trading strategies set up yet.\n\n' +
+        'Use /addstrategy to create your first automated trading strategy.',
+        { 
+          parse_mode: 'Markdown',
+          ...keyboards.autoTraderKeyboard
+        }
+      );
+    }
+    
+    let message = '📊 *Your Trading Strategies*\n\n';
+    
+    strategies.forEach((strategy, index) => {
+      const statusEmoji = strategy.enabled ? '✅' : '❌';
+      
+      message += `*${index + 1}. ${strategy.name}* ${statusEmoji}\n`;
+      message += `Budget: ${strategy.config.totalBudgetSOL} SOL\n`;
+      message += `Max Position: ${strategy.config.maxPositionSizeSOL} SOL\n`;
+      message += `Risk Settings: SL ${strategy.config.stopLoss}% / TP ${strategy.config.takeProfit}%\n`;
+      
+      if (strategy.stats.totalTrades > 0) {
+        const winRate = (strategy.stats.successfulTrades / strategy.stats.totalTrades) * 100;
+        message += `Performance: ${winRate.toFixed(1)}% win rate (${strategy.stats.successfulTrades}/${strategy.stats.totalTrades})\n`;
+        message += `Profit: ${strategy.stats.profit.toFixed(4)} SOL\n`;
+      } else {
+        message += `No trades executed yet\n`;
+      }
+      
+      message += `\n`;
+    });
+    
+    message += 'Select a strategy to manage it, or create a new one.';
+    
+    // Create inline keyboard for strategy management
+    const strategyButtons = strategies.map((strategy, index) => ({
+      text: `${index + 1}. ${strategy.name}`,
+      callback_data: `manage_strategy_${strategy.id}`
+    }));
+    
+    // Split buttons into rows of 2
+    const buttonRows = [];
+    for (let i = 0; i < strategyButtons.length; i += 2) {
+      buttonRows.push(strategyButtons.slice(i, i + 2));
+    }
+    
+    // Add button to create new strategy
+    buttonRows.push([
+      { text: '➕ Add New Strategy', callback_data: 'add_strategy' },
+      { text: '🔙 Back', callback_data: 'autotrader' }
+    ]);
+    
+    return ctx.reply(message, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: buttonRows
+      }
+    });
+  } catch (error) {
+    logger.error(`Error in handleViewStrategies: ${error.message}`);
+    return ctx.reply('❌ Error retrieving strategies. Please try again later.');
+  }
+};
+
+/**
+ * Handle strategy management selection
+ * @param {Object} ctx - Telegram context
+ * @param {string} strategyId - ID of the strategy to manage
+ */
+const handleManageStrategy = async (ctx, strategyId) => {
+  try {
+    // Check if auto trader is available
+    const autoTrader = global.botComponents?.autoTrader;
+    if (!autoTrader) {
+      return ctx.reply('❌ AutoTrader is not available. Please try again later.');
+    }
+    
+    // Get the strategy
+    const strategy = autoTrader.getStrategy(strategyId);
+    if (!strategy) {
+      return ctx.reply('❌ Strategy not found. It may have been deleted.');
+    }
+    
+    // Format message
+    const statusEmoji = strategy.enabled ? '✅ ENABLED' : '❌ DISABLED';
+    let message = `📊 *Strategy: ${strategy.name}*\n\n`;
+    message += `*Status:* ${statusEmoji}\n`;
+    message += `*Budget:* ${strategy.config.totalBudgetSOL} SOL\n`;
+    message += `*Max Position Size:* ${strategy.config.maxPositionSizeSOL} SOL\n`;
+    message += `*Stop-Loss:* ${strategy.config.stopLoss}%\n`;
+    message += `*Take-Profit:* ${strategy.config.takeProfit}%\n`;
+    message += `*Max Risk Level:* ${strategy.config.maxRiskLevel}%\n`;
+    message += `*Max Concurrent Positions:* ${strategy.config.maxConcurrentPositions}\n\n`;
+    
+    if (strategy.lastRun) {
+      message += `*Last Run:* ${strategy.lastRun.toLocaleString()}\n`;
+    }
+    
+    message += `*Total Trades:* ${strategy.stats.totalTrades}\n`;
+    
+    if (strategy.stats.totalTrades > 0) {
+      const winRate = (strategy.stats.successfulTrades / strategy.stats.totalTrades) * 100;
+      message += `*Success Rate:* ${winRate.toFixed(2)}%\n`;
+      message += `*Profit:* ${strategy.stats.profit.toFixed(4)} SOL\n\n`;
+    }
+    
+    // Create management buttons
+    const toggleText = strategy.enabled ? '❌ Disable Strategy' : '✅ Enable Strategy';
+    
+    const managementButtons = [
+      [
+        { text: toggleText, callback_data: `toggle_strategy_${strategyId}` },
+        { text: '✏️ Edit Strategy', callback_data: `edit_strategy_${strategyId}` }
+      ],
+      [
+        { text: '🗑️ Delete Strategy', callback_data: `delete_strategy_${strategyId}` },
+        { text: '🔙 Back to Strategies', callback_data: 'view_strategies' }
+      ]
+    ];
+    
+    return ctx.reply(message, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: managementButtons
+      }
+    });
+  } catch (error) {
+    logger.error(`Error in handleManageStrategy: ${error.message}`);
+    return ctx.reply('❌ Error managing strategy. Please try again later.');
+  }
+};
+
+/**
+ * Toggle a strategy's enabled status
+ * @param {Object} ctx - Telegram context
+ * @param {string} strategyId - ID of the strategy to toggle
+ */
+const handleToggleStrategy = async (ctx, strategyId) => {
+  try {
+    // Check if auto trader is available
+    const autoTrader = global.botComponents?.autoTrader;
+    if (!autoTrader) {
+      return ctx.reply('❌ AutoTrader is not available. Please try again later.');
+    }
+    
+    // Get the strategy
+    const strategy = autoTrader.getStrategy(strategyId);
+    if (!strategy) {
+      return ctx.reply('❌ Strategy not found. It may have been deleted.');
+    }
+    
+    // Toggle enabled status
+    const newStatus = !strategy.enabled;
+    autoTrader.updateStrategy(strategyId, { enabled: newStatus });
+    
+    // Show confirmation
+    const statusText = newStatus ? 'enabled' : 'disabled';
+    await ctx.reply(`✅ Strategy "${strategy.name}" has been ${statusText}.`);
+    
+    // Show updated strategy details
+    return handleManageStrategy(ctx, strategyId);
+  } catch (error) {
+    logger.error(`Error in handleToggleStrategy: ${error.message}`);
+    return ctx.reply('❌ Error toggling strategy. Please try again later.');
+  }
+};
+
+/**
+ * Delete a trading strategy
+ * @param {Object} ctx - Telegram context
+ * @param {string} strategyId - ID of the strategy to delete
+ */
+const handleDeleteStrategy = async (ctx, strategyId) => {
+  try {
+    // Check if auto trader is available
+    const autoTrader = global.botComponents?.autoTrader;
+    if (!autoTrader) {
+      return ctx.reply('❌ AutoTrader is not available. Please try again later.');
+    }
+    
+    // Get the strategy name before deleting
+    const strategy = autoTrader.getStrategy(strategyId);
+    if (!strategy) {
+      return ctx.reply('❌ Strategy not found. It may have been already deleted.');
+    }
+    
+    const strategyName = strategy.name;
+    
+    // Delete the strategy
+    const success = autoTrader.deleteStrategy(strategyId);
+    
+    if (success) {
+      await ctx.reply(`✅ Strategy "${strategyName}" has been deleted.`);
+      return handleViewStrategies(ctx);
+    } else {
+      return ctx.reply('❌ Failed to delete strategy. Please try again later.');
+    }
+  } catch (error) {
+    logger.error(`Error in handleDeleteStrategy: ${error.message}`);
+    return ctx.reply('❌ Error deleting strategy. Please try again later.');
+  }
+};
+
 // Command handlers
 module.exports = {
   /**
@@ -1955,5 +2485,19 @@ module.exports = {
     }
   },
   
-  updateMonitoredTokens
+  updateMonitoredTokens,
+  
+  // AutoTrader commands
+  handleAutoTrader,
+  handleToggleAutoTrader,
+  handleAddStrategy,
+  handleStrategyNameInput,
+  handleStrategyBudgetInput,
+  handleStrategyPositionSizeInput, 
+  handleStrategyStopLossInput,
+  handleStrategyTakeProfitInput,
+  handleViewStrategies,
+  handleManageStrategy,
+  handleToggleStrategy,
+  handleDeleteStrategy
 };

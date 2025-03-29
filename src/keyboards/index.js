@@ -22,7 +22,7 @@ const mainKeyboard = {
         { text: '⚙️ Settings', callback_data: 'settings' }
       ],
       [
-        { text: '📋 DCA Orders', callback_data: 'dcaOrders' },
+        { text: '🤖 AutoTrader', callback_data: 'autotrader' },
         { text: '🔄 Refresh', callback_data: 'refresh' }
       ]
     ]
@@ -212,6 +212,29 @@ const stopLossTakeProfitKeyboard = {
   }
 };
 
+// AutoTrader keyboard
+const autoTraderKeyboard = {
+  reply_markup: {
+    inline_keyboard: [
+      [
+        { text: '▶️ Start Trading', callback_data: 'start_autotrader' },
+        { text: '⏹️ Stop Trading', callback_data: 'stop_autotrader' }
+      ],
+      [
+        { text: '📊 View Strategies', callback_data: 'view_strategies' },
+        { text: '➕ Add Strategy', callback_data: 'add_strategy' }
+      ],
+      [
+        { text: '📈 Performance', callback_data: 'autotrader_performance' },
+        { text: '⚙️ Settings', callback_data: 'autotrader_settings' }
+      ],
+      [
+        { text: '« Back to Main Menu', callback_data: 'refresh' }
+      ]
+    ]
+  }
+};
+
 module.exports = {
   mainKeyboard,
   slippageKeyboard,
@@ -223,5 +246,6 @@ module.exports = {
   dcaOrderKeyboard,
   backToMainKeyboard,
   phantomDepositKeyboard,
-  phantomWithdrawKeyboard
+  phantomWithdrawKeyboard,
+  autoTraderKeyboard
 };

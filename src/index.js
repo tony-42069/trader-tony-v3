@@ -18,6 +18,10 @@ const TokenSniper = require('./trading/sniper');
 const PositionManager = require('./trading/position-manager');
 const JupiterClient = require('./utils/jupiter');
 const database = require('./utils/database');
+const AutoTrader = require('./trading/auto-trader');
+
+// Constants for intervals
+const MONITORING_UPDATE_INTERVAL = 60000; // 1 minute
 
 // BOOTSTRAP: Create data directories if they don't exist
 ['logs', 'data'].forEach(dir => {
@@ -34,7 +38,6 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 bot.use(session());
 
 // Set up monitoring interval
-const MONITORING_UPDATE_INTERVAL = 60000; // 1 minute
 setInterval(async () => {
   try {
     // Update token prices and inform users of changes
@@ -116,6 +119,15 @@ bot.use(adminMiddleware);
 bot.command('start', commands.handleStart);
 bot.command('help', commands.handleHelp);
 bot.command('balance', commands.handleBalance);
+bot.command('refresh', commands.handleBalance);
+bot.command('wallet', (ctx) => ctx.reply('Wallet information:', keyboards.walletKeyboard));
+bot.command('positions', commands.handlePositions);
+bot.command('fund', (ctx) => ctx.reply('Choose a funding method:', keyboards.fundKeyboard));
+bot.command('snipe', commands.handleSnipe);
+bot.command('buy', commands.handleBuy);
+bot.command('monitor', commands.handleMonitor);
+bot.command('autotrader', commands.handleAutoTrader);
+bot.command('addstrategy', commands.handleAddStrategy);
 
 // Trading commands
 bot.command('snipe', commands.handleSnipe);
@@ -184,6 +196,44 @@ bot.action(/stop_monitor_(.+)/, async (ctx) => {
   }
 });
 
+// AutoTrader actions
+bot.action('autotrader', commands.handleAutoTrader);
+bot.action('start_autotrader', commands.handleToggleAutoTrader);
+bot.action('stop_autotrader', commands.handleToggleAutoTrader);
+bot.action('view_strategies', commands.handleViewStrategies);
+bot.action('add_strategy', commands.handleAddStrategy);
+
+// Strategy management actions
+bot.action(/manage_strategy_(.+)/, async (ctx) => {
+  try {
+    const strategyId = ctx.match[1];
+    await commands.handleManageStrategy(ctx, strategyId);
+  } catch (error) {
+    logger.error(`Error in manage strategy action: ${error.message}`);
+    ctx.reply('Error managing strategy. Please try again.');
+  }
+});
+
+bot.action(/toggle_strategy_(.+)/, async (ctx) => {
+  try {
+    const strategyId = ctx.match[1];
+    await commands.handleToggleStrategy(ctx, strategyId);
+  } catch (error) {
+    logger.error(`Error in toggle strategy action: ${error.message}`);
+    ctx.reply('Error toggling strategy. Please try again.');
+  }
+});
+
+bot.action(/delete_strategy_(.+)/, async (ctx) => {
+  try {
+    const strategyId = ctx.match[1];
+    await commands.handleDeleteStrategy(ctx, strategyId);
+  } catch (error) {
+    logger.error(`Error in delete strategy action: ${error.message}`);
+    ctx.reply('Error deleting strategy. Please try again.');
+  }
+});
+
 // BOOTSTRAP: Handle text input messages
 bot.on(message('text'), async (ctx) => {
   const text = ctx.message.text;
@@ -238,6 +288,27 @@ bot.on(message('text'), async (ctx) => {
     if (ctx.session.state === 'WAITING_FOR_DCA_INTERVAL' && ctx.session.dcaSetup) {
       return commands.handleDCAIntervalInput(ctx, text);
     }
+    
+    // Handle strategy setup states
+    if (ctx.session.state === 'WAITING_FOR_STRATEGY_NAME') {
+      return commands.handleStrategyNameInput(ctx, text);
+    }
+    
+    if (ctx.session.state === 'WAITING_FOR_STRATEGY_BUDGET') {
+      return commands.handleStrategyBudgetInput(ctx, text);
+    }
+    
+    if (ctx.session.state === 'WAITING_FOR_STRATEGY_POSITION_SIZE') {
+      return commands.handleStrategyPositionSizeInput(ctx, text);
+    }
+    
+    if (ctx.session.state === 'WAITING_FOR_STRATEGY_STOPLOSS') {
+      return commands.handleStrategyStopLossInput(ctx, text);
+    }
+    
+    if (ctx.session.state === 'WAITING_FOR_STRATEGY_TAKEPROFIT') {
+      return commands.handleStrategyTakeProfitInput(ctx, text);
+    }
   }
   
   // Check if this is a token address (simplified check)
@@ -278,8 +349,11 @@ async function registerBotCommands() {
       { command: 'buy', description: 'Enter a token to buy' },
       { command: 'fund', description: 'View wallet funding options' },
       { command: 'wallet', description: 'View wallet information' },
-      { command: 'refresh', description: 'Update wallet balance' },
-      { command: 'positions', description: 'View your open positions' }
+      { command: 'positions', description: 'View your open positions' },
+      { command: 'monitor', description: 'Monitor token prices' },
+      { command: 'autotrader', description: 'Manage automated trading strategies' },
+      { command: 'addstrategy', description: 'Create a new trading strategy' },
+      { command: 'refresh', description: 'Update wallet balance' }
     ]);
     logger.info('Bot commands registered with Telegram');
   } catch (error) {
@@ -311,8 +385,18 @@ const initTradingComponents = async () => {
     // Initialize token sniper with position manager
     const tokenSniper = new TokenSniper(connection, wallet, riskAnalyzer, positionManager);
     
+    // Initialize AutoTrader with all required components
+    const autoTrader = new AutoTrader(
+      connection, 
+      wallet, 
+      tokenSniper, 
+      positionManager, 
+      riskAnalyzer,
+      solanaClient.jupiterClient
+    );
+    
     logger.info('Trading components initialized successfully');
-    return { riskAnalyzer, tokenSniper, positionManager };
+    return { riskAnalyzer, tokenSniper, positionManager, autoTrader };
   } catch (error) {
     logger.error(`Error initializing trading components: ${error.message}`);
     throw error; // Rethrow the error to handle it in the startBot function
@@ -346,7 +430,8 @@ const startBot = async () => {
       tradingComponents = {
         riskAnalyzer: new RiskAnalyzer(connection),
         positionManager: new PositionManager(connection, wallet),
-        tokenSniper: null  // Will be created later if needed
+        tokenSniper: null,  // Will be created later if needed
+        autoTrader: null  // Will be created later if needed
       };
     }
     
@@ -365,6 +450,64 @@ const startBot = async () => {
           tradingComponents.positionManager
         );
       }
+    }
+    
+    // Create AutoTrader if it doesn't exist yet
+    if (!tradingComponents.autoTrader && tradingComponents.tokenSniper && tradingComponents.positionManager) {
+      const connection = solanaClient.connection;
+      const wallet = solanaClient.walletManager;
+      if (connection && wallet) {
+        tradingComponents.autoTrader = new AutoTrader(
+          connection, 
+          wallet, 
+          tradingComponents.tokenSniper, 
+          tradingComponents.positionManager, 
+          tradingComponents.riskAnalyzer,
+          solanaClient.jupiterClient
+        );
+      }
+    }
+    
+    // Add AutoTrader event listeners for notifications
+    if (tradingComponents.autoTrader) {
+      tradingComponents.autoTrader.on('tradeExecuted', async (data) => {
+        // Notify admin users about auto trades
+        const adminIds = process.env.ADMIN_TELEGRAM_IDS ? process.env.ADMIN_TELEGRAM_IDS.split(',') : [];
+        
+        for (const adminId of adminIds) {
+          try {
+            await bot.telegram.sendMessage(
+              adminId,
+              `🤖 *AutoTrader Executed Trade*\n\n` +
+              `*Strategy:* ${data.strategy.name}\n` +
+              `*Token:* ${data.trade.tokenAddress}\n` +
+              `*Amount:* ${data.trade.amountInSol} SOL\n` +
+              `*Success:* ${data.trade.success ? '✅' : '❌'}\n` +
+              `*Transaction:* ${data.trade.signature || 'N/A'}`,
+              { parse_mode: 'Markdown' }
+            );
+          } catch (notifyError) {
+            logger.error(`Failed to notify admin ${adminId}: ${notifyError.message}`);
+          }
+        }
+      });
+      
+      tradingComponents.autoTrader.on('strategyUpdated', (strategy) => {
+        logger.info(`Strategy ${strategy.id} was updated`);
+      });
+      
+      // Register price monitoring for auto-trader tokens
+      setInterval(async () => {
+        try {
+          // Check if autoTrader is available and running
+          if (tradingComponents.autoTrader && tradingComponents.autoTrader.running) {
+            // Use managePositions to check and update positions
+            await tradingComponents.autoTrader.managePositions();
+          }
+        } catch (error) {
+          logger.error(`Error in auto trading monitoring: ${error.message}`);
+        }
+      }, MONITORING_UPDATE_INTERVAL);
     }
     
     // Launch the bot with improved configuration
