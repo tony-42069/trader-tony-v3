@@ -14,24 +14,52 @@ const PhantomConnectManager = require('./phantom');
 class SolanaClient {
   constructor() {
     this.connection = null;
+    this.wallet = null;
     this.walletManager = null;
-    this.transactionUtility = null;
-    this.tokenSniper = null;
-    this.riskAnalyzer = null;
-    this.positionManager = null;
     this.jupiterClient = null;
-    this.phantomConnectManager = null;
+    this.transactionUtility = null;
+    this.riskAnalyzer = null;
+    this.tokenSniper = null;
+    this.positionManager = null;
+    this.eventListeners = [];
+    
     this.initialized = false;
     this.demoMode = false;
     this.readOnlyMode = false;
     this.demoWalletAddress = null;
+    
+    // Early initialization of position manager in case of demo mode
+    this.initPositionManager();
+  }
+
+  /**
+   * Initialize position manager early
+   * @private
+   */
+  initPositionManager() {
+    try {
+      // Early import to avoid circular dependencies
+      const PositionManager = require('../trading/position-manager');
+      this.positionManager = new PositionManager(this.connection, this.wallet);
+      logger.info('Position manager initialized early');
+    } catch (error) {
+      logger.error(`Error initializing position manager early: ${error.message}`);
+    }
   }
 
   /**
    * Initialize the Solana client
    */
   async init() {
+    if (this.initialized) {
+      return;
+    }
+    
     try {
+      // Load environment variables
+      this.demoMode = process.env.DEMO_MODE === 'true';
+      this.demoWalletAddress = process.env.DEMO_WALLET_ADDRESS;
+      
       // Connect to Solana network
       const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
       this.connection = new Connection(rpcUrl, 'confirmed');
@@ -100,8 +128,18 @@ class SolanaClient {
         this.riskAnalyzer
       );
       
-      // Initialize position manager
-      this.positionManager = new PositionManager(this.connection, this.walletManager);
+      // Initialize position manager if not already done
+      if (!this.positionManager) {
+        const PositionManager = require('../trading/position-manager');
+        this.positionManager = new PositionManager(this.connection, this.wallet);
+      } else {
+        // Reconnect existing position manager with updated connection and wallet
+        this.positionManager.connection = this.connection;
+        this.positionManager.wallet = this.wallet;
+        
+        // Force reload positions to ensure they're available
+        this.positionManager.loadPositions();
+      }
       
       // Create Jupiter client for DEX integration
       this.jupiterClient = new JupiterClient(this.connection);
@@ -147,6 +185,13 @@ class SolanaClient {
   getOpenPositions() {
     if (!this.initialized) {
       logger.warn('Attempted to get positions before initialization');
+      
+      // Even if not initialized, return positions in demo mode
+      if (this.demoMode && this.positionManager) {
+        logger.info('Retrieving positions in demo mode despite not being fully initialized');
+        return this.positionManager.getOpenPositions();
+      }
+      
       return [];
     }
     

@@ -53,9 +53,12 @@ Security Status: 🔒 Secure`;
 const handlePositions = async (ctx) => {
   try {
     // Get all open positions
+    logger.info('Handling positions command - requesting open positions from Solana client');
     const openPositions = solanaClient.getOpenPositions();
+    logger.info(`Retrieved ${openPositions.length} open positions from Solana client`);
     
     if (openPositions.length === 0) {
+      logger.info('No open positions found, showing empty positions message');
       return ctx.reply('📊 *You have no open positions*\n\nUse /snipe or /buy to purchase tokens.', {
         parse_mode: 'Markdown'
       });
