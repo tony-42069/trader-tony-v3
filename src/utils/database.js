@@ -32,12 +32,15 @@ class Database {
    */
   savePositions(positions) {
     try {
-      const positionsArray = Array.from(positions.values());
       const filePath = path.join(this.dataDir, 'positions.json');
       
+      // Convert Map to Array for JSON serialization
+      const positionsArray = Array.from(positions.values());
+      
+      // Save with our expected format - an object with a positions array
       fs.writeFileSync(
         filePath,
-        JSON.stringify(positionsArray, null, 2)
+        JSON.stringify({ positions: positionsArray }, null, 2)
       );
       
       logger.info(`Saved ${positionsArray.length} positions to disk`);
@@ -62,17 +65,28 @@ class Database {
       }
       
       const data = fs.readFileSync(filePath, 'utf8');
-      const positionsArray = JSON.parse(data);
+      const jsonData = JSON.parse(data);
+      
+      // Check if the parsed data is an object with a positions array
+      // or directly an array of positions
+      const positionsArray = Array.isArray(jsonData) ? jsonData : 
+                            (jsonData.positions && Array.isArray(jsonData.positions)) ? 
+                            jsonData.positions : [];
       
       // Create a new map from the array
       const positions = new Map();
-      positionsArray.forEach(position => {
-        // Restore Date objects which were serialized as strings
-        if (position.createdAt) position.createdAt = new Date(position.createdAt);
-        if (position.closedAt) position.closedAt = new Date(position.closedAt);
-        
-        positions.set(position.id, position);
-      });
+      
+      // Only iterate if we have positions
+      if (positionsArray && positionsArray.length > 0) {
+        positionsArray.forEach(position => {
+          // Restore Date objects which were serialized as strings
+          if (position.createdAt) position.createdAt = new Date(position.createdAt);
+          if (position.closedAt) position.closedAt = new Date(position.closedAt);
+          if (position.entryTimestamp) position.entryTimestamp = new Date(position.entryTimestamp);
+          
+          positions.set(position.id, position);
+        });
+      }
       
       logger.info(`Loaded ${positions.size} positions from disk`);
       return positions;
