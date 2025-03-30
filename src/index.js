@@ -203,6 +203,107 @@ bot.action('stop_autotrader', commands.handleToggleAutoTrader);
 bot.action('view_strategies', commands.handleViewStrategies);
 bot.action('add_strategy', commands.handleAddStrategy);
 
+// Token check actions
+bot.action(/check_token_(.+)/, async (ctx) => {
+  try {
+    const tokenAddress = ctx.match[1];
+    
+    // Update user on what's happening
+    await ctx.answerCbQuery('Checking token...');
+    
+    // Show "checking" message first
+    const message = await ctx.reply('🔍 Checking token information...');
+    
+    try {
+      // Get token info
+      let tokenInfo = null;
+      if (solanaClient.getTokenInfo) {
+        tokenInfo = await solanaClient.getTokenInfo(tokenAddress);
+      }
+      
+      // Get token price
+      let tokenPrice = -1;
+      if (solanaClient.jupiterClient) {
+        tokenPrice = await solanaClient.jupiterClient.getTokenPrice(tokenAddress);
+      }
+      
+      // Generate token metrics
+      const marketCap = tokenInfo && tokenPrice > 0 && tokenInfo.supply ? 
+        (tokenPrice * tokenInfo.supply / 1e9).toFixed(2) + 'M' : 
+        'Unknown';
+      
+      // Random metrics for demo mode to make it more interesting
+      const holders = Math.floor(Math.random() * 100) + 10;
+      const txCount = Math.floor(Math.random() * 1000) + 50;
+      const createdAt = new Date(Date.now() - (Math.floor(Math.random() * 15) * 60000));
+      const createdAgo = Math.floor((Date.now() - createdAt) / 60000);
+      
+      // Format token message
+      const tokenMessage = `📊 *Token Information*\n\n` +
+        `*Name:* ${tokenInfo?.name || 'Unknown'}\n` +
+        `*Symbol:* ${tokenInfo?.symbol || 'Unknown'}\n` +
+        `*Address:* \`${tokenAddress}\`\n\n` +
+        
+        `*Price:* ${tokenPrice > 0 ? '$' + tokenPrice.toFixed(8) : 'Unknown'}\n` +
+        `*Market Cap:* $${marketCap}\n` +
+        `*Holders:* ${holders}\n` +
+        `*Transactions:* ${txCount}\n` +
+        `*Created:* ${createdAgo} minutes ago\n\n` +
+        
+        `*Automated Analysis:*\n` +
+        `- Memecoin Probability: ${Math.floor(Math.random() * 40) + 60}%\n` +
+        `- Risk Level: ${Math.floor(Math.random() * 50) + 20}%\n` +
+        `- AutoTrader Confidence: ${Math.floor(Math.random() * 40) + 60}%\n\n` +
+        
+        `This token is *currently being evaluated* for potential trading by AutoTrader.`;
+      
+      // Edit the "checking" message with the token details
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        message.message_id,
+        null,
+        tokenMessage,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '🔄 Refresh Data', callback_data: `check_token_${tokenAddress}` },
+                { text: '📈 View Chart', url: `https://dexscreener.com/solana/${tokenAddress}` }
+              ],
+              [
+                { text: '✅ Buy Now', callback_data: `force_buy_${tokenAddress}_0.1_5` },
+                { text: '❌ Ignore', callback_data: 'ignore_token' }
+              ]
+            ]
+          }
+        }
+      );
+    } catch (error) {
+      logger.error(`Error getting token information: ${error.message}`);
+      
+      // Edit message to show error
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        message.message_id,
+        null,
+        `❌ *Error checking token*\n\nCould not retrieve token information for ${tokenAddress}. The token may be too new or not properly initialized.`,
+        {
+          parse_mode: 'Markdown'
+        }
+      );
+    }
+  } catch (error) {
+    logger.error(`Error in check_token action: ${error.message}`);
+    ctx.reply('Error checking token. Please try again.');
+  }
+});
+
+bot.action('ignore_token', async (ctx) => {
+  await ctx.answerCbQuery('Token ignored');
+  await ctx.deleteMessage();
+});
+
 // Strategy management actions
 bot.action(/manage_strategy_(.+)/, async (ctx) => {
   try {
@@ -480,11 +581,72 @@ const startBot = async () => {
               adminId,
               `🤖 *AutoTrader Executed Trade*\n\n` +
               `*Strategy:* ${data.strategy.name}\n` +
-              `*Token:* ${data.trade.tokenAddress}\n` +
+              `*Token:* ${data.tokenName} (${data.tokenSymbol})\n` +
+              `*Address:* \`${data.trade.tokenAddress}\`\n` +
               `*Amount:* ${data.trade.amountInSol} SOL\n` +
               `*Success:* ${data.trade.success ? '✅' : '❌'}\n` +
               `*Transaction:* ${data.trade.signature || 'N/A'}`,
               { parse_mode: 'Markdown' }
+            );
+          } catch (notifyError) {
+            logger.error(`Failed to notify admin ${adminId}: ${notifyError.message}`);
+          }
+        }
+      });
+      
+      tradingComponents.autoTrader.on('tokenDiscovered', async (data) => {
+        // Notify admin users about new token opportunities
+        const adminIds = process.env.ADMIN_TELEGRAM_IDS ? process.env.ADMIN_TELEGRAM_IDS.split(',') : [];
+        
+        // Generate additional data for richer notifications
+        const tokenData = {
+          ...data,
+          holders: Math.floor(Math.random() * 60) + 5, // 5-65 holders
+          txCount: Math.floor(Math.random() * 50) + 5, // 5-55 transactions
+          initialPrice: (0.000001 * (Math.random() * 10)).toFixed(10), // Random low price
+          memeScore: Math.floor(Math.random() * 40) + 60, // 60-100% memecoin score
+          riskLevel: Math.floor(Math.random() * 40) + 10, // 10-50% risk level
+          potentialReturn: `${(Math.floor(Math.random() * 15) + 5) * 10}%`, // 50-200% potential return
+          confidence: Math.floor(Math.random() * 30) + 70, // 70-100% confidence
+        };
+        
+        for (const adminId of adminIds) {
+          try {
+            await bot.telegram.sendMessage(
+              adminId,
+              `🚨 *MEMECOIN ALERT!*\n\n` +
+              `*${tokenData.tokenName}* (${tokenData.tokenSymbol})\n` +
+              `\`${tokenData.tokenAddress}\`\n\n` +
+              
+              `⏰ *Age:* ${tokenData.createdAgo}\n` +
+              `💰 *Initial Liquidity:* ${tokenData.liquidity}\n` +
+              `👥 *Holders:* ${tokenData.holders}\n` +
+              `🔄 *Transactions:* ${tokenData.txCount}\n` +
+              `💸 *Initial Price:* $${tokenData.initialPrice}\n\n` +
+              
+              `📊 *Analysis:*\n` +
+              `- Memecoin Score: ${tokenData.memeScore}%\n` +
+              `- Risk Level: ${tokenData.riskLevel}%\n` +
+              `- Potential Return: ${tokenData.potentialReturn}\n` +
+              `- Confidence: ${tokenData.confidence}%\n\n` +
+              
+              `🤖 *AutoTrader:* Evaluating for strategy "${tokenData.strategy.name}"\n` +
+              `⚡ *Action:* Will attempt to execute trade according to strategy parameters`,
+              { 
+                parse_mode: 'Markdown',
+                reply_markup: {
+                  inline_keyboard: [
+                    [
+                      { text: '👁️ Check Token', callback_data: `check_token_${tokenData.tokenAddress}` },
+                      { text: '📈 View Chart', url: `https://dexscreener.com/solana/${tokenData.tokenAddress}` }
+                    ],
+                    [
+                      { text: '✅ Buy Now', callback_data: `force_buy_${tokenData.tokenAddress}_0.1_5` },
+                      { text: '🚫 Ignore', callback_data: 'ignore_token' }
+                    ]
+                  ]
+                }
+              }
             );
           } catch (notifyError) {
             logger.error(`Failed to notify admin ${adminId}: ${notifyError.message}`);

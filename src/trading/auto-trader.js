@@ -2,6 +2,7 @@ const { PublicKey } = require('@solana/web3.js');
 const EventEmitter = require('events');
 const logger = require('../utils/logger');
 const database = require('../utils/database');
+const crypto = require('crypto');
 
 /**
  * AutoTrader class to handle autonomous trading strategies
@@ -17,6 +18,7 @@ class AutoTrader extends EventEmitter {
     this.riskAnalyzer = riskAnalyzer;
     this.jupiterClient = jupiterClient;
     this.strategies = new Map();
+    this.opportunitiesByStrategy = new Map(); // Store opportunities per strategy
     this.running = false;
     this.scanInterval = null;
     this.tradeInterval = null;
@@ -285,20 +287,127 @@ class AutoTrader extends EventEmitter {
     if (!this.running) return;
     
     try {
-      logger.info('Scanning for trading opportunities...');
+      logger.info('Scanning for new memecoin opportunities...');
       
-      // Implement token scanning logic based on Jupiter DEX data
-      // This could monitor new tokens, liquidity changes, or price movements
+      // In real implementation, we would:
+      // 1. Query Jupiter or other DEX aggregators for newly added tokens
+      // 2. Filter for tokens created in the last 15 minutes
+      // 3. Analyze token metadata for memecoin characteristics
       
-      // Example: Track trending tokens or those with increasing volume
+      // For each active strategy
+      const enabledStrategies = Array.from(this.strategies.values())
+        .filter(strategy => strategy.enabled);
       
-      // For each token that meets criteria, add to opportunity list
-      // which will be processed by executeStrategies()
+      if (enabledStrategies.length === 0) {
+        logger.info('No enabled strategies to execute');
+        return;
+      }
       
-      logger.info('Token scan completed');
+      // In demo mode, occasionally simulate finding a new memecoin (approximately 1 in 10 scans)
+      if (this.wallet.demoMode && Math.random() < 0.1) {
+        // Generate a random token address
+        const randomBytes = crypto.randomBytes(32);
+        const tokenAddress = new PublicKey(randomBytes).toString();
+        
+        // Token metadata with memecoin characteristics
+        const tokenMetadata = {
+          name: this.generateMemeTokenName(),
+          symbol: this.generateMemeTokenSymbol(),
+          createdAt: new Date(Date.now() - Math.floor(Math.random() * 15 * 60000)), // 0-15 minutes ago
+          initialLiquiditySOL: 10 + Math.random() * 100, // 10-110 SOL
+          holderCount: Math.floor(Math.random() * 50) + 10, // 10-60 holders
+          isMemecoin: true,
+          supply: 1000000000 + Math.floor(Math.random() * 9000000000), // 1-10B supply
+          priceChangePercent: Math.random() * 30, // 0-30% price change
+          volumeIncreasePercent: 50 + Math.random() * 200, // 50-250% volume increase
+          potentialRisk: Math.floor(Math.random() * 40) + 10 // 10-50% risk level
+        };
+        
+        logger.info(`[DEMO] Found new memecoin: ${tokenMetadata.name} (${tokenMetadata.symbol})`);
+        logger.info(`[DEMO] Token address: ${tokenAddress}`);
+        logger.info(`[DEMO] Created: ${Math.floor((Date.now() - tokenMetadata.createdAt) / 60000)} minutes ago`);
+        logger.info(`[DEMO] Initial liquidity: ${tokenMetadata.initialLiquiditySOL.toFixed(2)} SOL`);
+        
+        // For each enabled strategy, check if this token meets criteria
+        for (const strategy of enabledStrategies) {
+          // Check if the token meets the strategy criteria for memecoins
+          if (
+            // Liquidity check
+            tokenMetadata.initialLiquiditySOL >= strategy.config.minLiquiditySOL &&
+            
+            // Age check (within last 15 minutes, configurable in strategy)
+            (Date.now() - tokenMetadata.createdAt) <= (strategy.config.maxTokenAgeMinutes || 15) * 60000 &&
+            
+            // Risk level check
+            tokenMetadata.potentialRisk <= strategy.config.maxRiskLevel &&
+            
+            // Minimum holder count
+            tokenMetadata.holderCount >= strategy.config.minHolders
+          ) {
+            logger.info(`[DEMO] Token ${tokenMetadata.symbol} meets criteria for strategy: ${strategy.name}`);
+            
+            // Store token for strategy execution
+            if (!this.opportunitiesByStrategy.has(strategy.id)) {
+              this.opportunitiesByStrategy.set(strategy.id, []);
+            }
+            
+            this.opportunitiesByStrategy.get(strategy.id).push({
+              tokenAddress,
+              metadata: tokenMetadata,
+              discoveredAt: new Date()
+            });
+            
+            // Notify admin about the opportunity
+            this.emit('tokenDiscovered', {
+              strategy,
+              tokenAddress,
+              tokenName: tokenMetadata.name,
+              tokenSymbol: tokenMetadata.symbol,
+              createdAgo: `${Math.floor((Date.now() - tokenMetadata.createdAt) / 60000)} minutes ago`,
+              liquidity: `${tokenMetadata.initialLiquiditySOL.toFixed(2)} SOL`
+            });
+          } else {
+            logger.debug(`[DEMO] Token ${tokenMetadata.symbol} does not meet criteria for strategy: ${strategy.name}`);
+          }
+        }
+      }
+      
+      logger.info('Memecoin token scan completed');
     } catch (error) {
       logger.error(`Error scanning for opportunities: ${error.message}`);
     }
+  }
+  
+  /**
+   * Generate a random memecoin name
+   * @returns {string} Random memecoin name
+   */
+  generateMemeTokenName() {
+    const prefixes = ['Moon', 'Doge', 'Shib', 'Pepe', 'Wojak', 'Chad', 'Ape', 'Frog', 'Cat', 'Sol', 'Elon', 'Baby', 'Floki', 'Space', 'Galaxy', 'Cyber', 'Meme', 'Magic', 'Rocket', 'Based'];
+    const suffixes = ['Inu', 'Moon', 'Rocket', 'Lambo', 'Coin', 'Token', 'Doge', 'Floki', 'Cash', 'Money', 'Gold', 'Diamond', 'Hands', 'King', 'Lord', 'God', 'Star', 'AI', 'Chain', 'Dao'];
+    
+    const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+    const suffix = suffixes[Math.floor(Math.random() * suffixes.length)];
+    
+    return `${prefix}${suffix}`;
+  }
+  
+  /**
+   * Generate a random memecoin symbol
+   * @returns {string} Random memecoin symbol
+   */
+  generateMemeTokenSymbol() {
+    const name = this.generateMemeTokenName();
+    // Take first 3-5 letters to form a symbol
+    const length = 3 + Math.floor(Math.random() * 3); // 3-5 characters
+    let symbol = name.substring(0, length).toUpperCase();
+    
+    // Ensure symbols are at least 3 characters by adding 'X' if needed
+    while (symbol.length < 3) {
+      symbol += 'X';
+    }
+    
+    return symbol;
   }
 
   /**
@@ -321,7 +430,34 @@ class AutoTrader extends EventEmitter {
       // Process each strategy
       for (const strategy of enabledStrategies) {
         try {
-          await this.applyStrategy(strategy);
+          // Get opportunities for this strategy
+          const opportunities = this.opportunitiesByStrategy.get(strategy.id) || [];
+          
+          // Skip if no opportunities
+          if (opportunities.length === 0) {
+            logger.debug(`No opportunities for strategy ${strategy.name}`);
+            continue;
+          }
+          
+          // Sort by newest first
+          opportunities.sort((a, b) => b.discoveredAt - a.discoveredAt);
+          
+          // Take the newest opportunity
+          const opportunity = opportunities[0];
+          
+          // Don't process opportunities we've already seen or traded
+          if (opportunity.processed) {
+            continue;
+          }
+          
+          logger.info(`Processing opportunity for ${opportunity.metadata.name} (${opportunity.metadata.symbol})`);
+          
+          // Mark as processed to avoid duplicate trades
+          opportunity.processed = true;
+          
+          // Apply the strategy to this opportunity
+          await this.applyStrategy(strategy, opportunity);
+          
         } catch (strategyError) {
           logger.error(`Error applying strategy ${strategy.id}: ${strategyError.message}`);
         }
@@ -332,10 +468,11 @@ class AutoTrader extends EventEmitter {
   }
 
   /**
-   * Apply a specific trading strategy
+   * Apply a specific trading strategy to a given opportunity
    * @param {Object} strategy - The strategy to apply
+   * @param {Object} opportunity - The trading opportunity
    */
-  async applyStrategy(strategy) {
+  async applyStrategy(strategy, opportunity = null) {
     try {
       logger.info(`Applying strategy: ${strategy.name} (${strategy.id})`);
       
@@ -359,58 +496,115 @@ class AutoTrader extends EventEmitter {
         return;
       }
       
-      const positionSizeSOL = Math.min(strategy.config.maxPositionSizeSOL, availableBudget);
-      
-      // Find tokens that match this strategy's criteria
-      // This would be populated by scanForTradingOpportunities()
-      // For now, this is a placeholder for where you'd implement your token selection logic
-      
-      // If a suitable token is found, execute the trade
-      // This is a placeholder for the actual trading logic
-      /*
-      const tokenAddress = "suitableTokenAddress";
-      
-      // Check risk level first
-      const riskAnalysis = await this.riskAnalyzer.analyzeToken(tokenAddress);
-      
-      if (riskAnalysis.riskLevel > strategy.config.maxRiskLevel) {
-        logger.info(`Token ${tokenAddress} exceeds max risk level for strategy ${strategy.name}`);
-        return;
-      }
-      
-      // Execute the trade
-      const tradeResult = await this.tokenSniper.snipeToken(
-        tokenAddress,
-        positionSizeSOL,
-        {
-          slippage: 5, // Higher slippage for auto-trading to ensure execution
-          stopLoss: strategy.config.stopLoss,
-          takeProfit: strategy.config.takeProfit,
-          trailingStop: strategy.config.trailingStop,
-          strategyId: strategy.id // Tag this position with the strategy ID
-        }
+      // Determine position size (random between 50-100% of max position size for variety)
+      const positionSizeFactor = 0.5 + (Math.random() * 0.5); // 50-100%
+      const positionSizeSOL = Math.min(
+        strategy.config.maxPositionSizeSOL * positionSizeFactor, 
+        availableBudget
       );
       
-      // Update strategy stats
-      strategy.lastRun = new Date();
-      strategy.stats.totalTrades++;
-      
-      if (tradeResult.success) {
-        strategy.stats.successfulTrades++;
-        // Send notification if enabled
-        if (strategy.config.notifications.onEntry) {
-          this.emit('tradeExecuted', { strategy, trade: tradeResult });
-        }
-      } else {
-        strategy.stats.failedTrades++;
-        if (strategy.config.notifications.onError) {
-          this.emit('tradeError', { strategy, error: tradeResult.error });
-        }
+      // If no opportunity was provided but we're in demo mode, create a simulated one
+      if (!opportunity && this.wallet.demoMode) {
+        const randomBytes = crypto.randomBytes(32);
+        const tokenAddress = new PublicKey(randomBytes).toString();
+        
+        opportunity = {
+          tokenAddress,
+          metadata: {
+            name: this.generateMemeTokenName(),
+            symbol: this.generateMemeTokenSymbol(),
+            initialLiquiditySOL: 10 + Math.random() * 100,
+            potentialRisk: Math.floor(Math.random() * 40) + 10
+          },
+          discoveredAt: new Date()
+        };
       }
       
-      // Save updated strategy
-      this.saveStrategies();
-      */
+      // Execute the trade if we have an opportunity
+      if (opportunity) {
+        const tokenAddress = opportunity.tokenAddress;
+        const metadata = opportunity.metadata;
+        
+        logger.info(`Executing trade for ${metadata.name} (${metadata.symbol})`);
+        logger.info(`Position size: ${positionSizeSOL.toFixed(4)} SOL`);
+        
+        if (this.wallet.demoMode) {
+          // Simulate trade execution
+          await new Promise(resolve => setTimeout(resolve, 1500)); // Simulate delay
+          
+          // Create simulated trade result
+          const tradeResult = {
+            success: Math.random() > 0.1, // 90% success rate in demo
+            tokenAddress,
+            amountInSol: positionSizeSOL,
+            signature: `demo_tx_${Date.now().toString(16)}`,
+            positionId: `demo_pos_${Date.now().toString(16)}`,
+            inAmount: positionSizeSOL,
+            outAmount: positionSizeSOL * (1000 + Math.random() * 9000), // Random token amount
+            priceImpactPct: 0.1 + Math.random() * 2.9, // 0.1-3% price impact
+            entryPrice: 0.000001 * (1 + Math.random()), // Random entry price
+            demoMode: true
+          };
+          
+          // Update strategy stats
+          strategy.lastRun = new Date();
+          strategy.stats.totalTrades++;
+          
+          if (tradeResult.success) {
+            strategy.stats.successfulTrades++;
+            
+            // Create a mock position for tracking
+            if (this.positionManager) {
+              const position = this.positionManager.addPosition(
+                tokenAddress,
+                tradeResult.entryPrice,
+                tradeResult.outAmount,
+                {
+                  stopLoss: strategy.config.stopLoss,
+                  takeProfit: strategy.config.takeProfit,
+                  trailingStop: strategy.config.trailingStop,
+                  strategyId: strategy.id,
+                  initialInvestment: positionSizeSOL,
+                  tokenName: metadata.name,
+                  tokenSymbol: metadata.symbol,
+                  isDemoPosition: true
+                }
+              );
+              
+              tradeResult.positionId = position.id;
+            }
+            
+            // Send notification if enabled
+            if (strategy.config.notifications.onEntry) {
+              this.emit('tradeExecuted', { 
+                strategy, 
+                trade: tradeResult,
+                tokenName: metadata.name,
+                tokenSymbol: metadata.symbol
+              });
+            }
+          } else {
+            strategy.stats.failedTrades++;
+            if (strategy.config.notifications.onError) {
+              this.emit('tradeError', { 
+                strategy, 
+                error: 'Simulated trade failure',
+                tokenName: metadata.name,
+                tokenSymbol: metadata.symbol
+              });
+            }
+          }
+          
+          // Save updated strategy
+          this.saveStrategies();
+          return tradeResult;
+        } else {
+          // REAL MODE would be implemented here for actual trading
+          // This is just a placeholder - don't implement real trading without thorough testing
+          logger.warn('Real trading mode is not implemented in this version for safety');
+          return { success: false, error: 'Real trading mode not implemented' };
+        }
+      }
       
       logger.info(`Strategy ${strategy.name} execution completed`);
     } catch (error) {
