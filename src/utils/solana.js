@@ -38,12 +38,17 @@ class SolanaClient {
    */
   initPositionManager() {
     try {
-      // Early import to avoid circular dependencies
       const PositionManager = require('../trading/position-manager');
-      this.positionManager = new PositionManager(this.connection, this.wallet);
-      logger.info('Position manager initialized early');
+      this.positionManager = new PositionManager(this.connection, this.walletManager);
+      
+      // Set up Jupiter client for the position manager if available
+      if (this.jupiterClient) {
+        this.positionManager.setJupiterClient(this.jupiterClient);
+      }
+      
+      logger.info('Position manager initialized');
     } catch (error) {
-      logger.error(`Error initializing position manager early: ${error.message}`);
+      logger.error(`Failed to initialize position manager: ${error.message}`);
     }
   }
 
@@ -131,18 +136,18 @@ class SolanaClient {
       // Initialize position manager if not already done
       if (!this.positionManager) {
         const PositionManager = require('../trading/position-manager');
-        this.positionManager = new PositionManager(this.connection, this.wallet);
+        this.positionManager = new PositionManager(this.connection, this.walletManager);
       } else {
         // Reconnect existing position manager with updated connection and wallet
         this.positionManager.connection = this.connection;
-        this.positionManager.wallet = this.wallet;
+        this.positionManager.wallet = this.walletManager;
         
         // Force reload positions to ensure they're available
         this.positionManager.loadPositions();
       }
       
-      // Create Jupiter client for DEX integration
-      this.jupiterClient = new JupiterClient(this.connection);
+      // Initialize Jupiter client for DEX integration
+      await this.initJupiterClient();
       
       // Initialize Phantom Connect manager
       this.phantomConnectManager = new PhantomConnectManager(this);
@@ -735,6 +740,25 @@ class SolanaClient {
         riskLevel: 100,
         warnings: ['Error analyzing token']
       };
+    }
+  }
+
+  /**
+   * Initialize trading components
+   */
+  async initJupiterClient() {
+    try {
+      const JupiterClient = require('../utils/jupiter');
+      this.jupiterClient = new JupiterClient(this.connection);
+      
+      // Connect Jupiter client to position manager if available
+      if (this.positionManager) {
+        this.positionManager.setJupiterClient(this.jupiterClient);
+      }
+      
+      logger.info('Jupiter client initialized');
+    } catch (error) {
+      logger.error(`Failed to initialize Jupiter client: ${error.message}`);
     }
   }
 }

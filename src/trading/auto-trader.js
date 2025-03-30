@@ -1750,6 +1750,374 @@ class AutoTrader extends EventEmitter {
     // Default to false if no memecoin characteristics detected
     return false;
   }
+
+  /**
+   * Execute a buy order for a token according to the strategy
+   * @param {Object} tokenMetadata - Token metadata
+   * @param {Object} strategy - Trading strategy
+   * @returns {Promise<Object>} Buy result
+   */
+  async executeBuy(tokenMetadata, strategy) {
+    try {
+      if (!tokenMetadata || !tokenMetadata.address) {
+        throw new Error('Invalid token metadata');
+      }
+      
+      if (!strategy) {
+        throw new Error('No strategy provided');
+      }
+      
+      if (!this.wallet || this.wallet.demoMode) {
+        logger.info(`Demo mode: Simulating buy for token ${tokenMetadata.address}`);
+        
+        // Calculate position size based on strategy
+        const totalPositionSizeSOL = strategy.positionSizeSOL || 0.1;
+        
+        // In real mode, we would execute a multi-stage buying approach
+        // For demo mode, we'll just simulate the first buy (40% of total position)
+        const initialBuySize = totalPositionSizeSOL * 0.4;
+        
+        // Simulate buy transaction
+        const buyResult = {
+          success: true,
+          transactionHash: `demo_tx_${Date.now().toString(16)}`,
+          amount: initialBuySize,
+          tokenAmount: initialBuySize / tokenMetadata.price * 1000, // Simulated token amount
+          price: tokenMetadata.price,
+          timestamp: Date.now(),
+          isScaleIn: true,
+          buyPhase: 1,
+          totalPositionSizeSOL
+        };
+        
+        // Add position to position manager with scale-in info
+        if (this.positionManager) {
+          const position = this.positionManager.addPosition(
+            tokenMetadata.address,
+            tokenMetadata.price,
+            buyResult.tokenAmount,
+            {
+              stopLoss: strategy.stopLossPercentage || 15,
+              takeProfit: strategy.takeProfitPercentage || 50,
+              trailingStop: strategy.trailingStopPercentage || 12,
+              maxHoldTime: strategy.maxHoldTimeMinutes || 240,  // 4 hours by default
+              scaleInInfo: {
+                enabled: true,
+                totalPositionSizeSOL,
+                remainingPositionSizeSOL: totalPositionSizeSOL * 0.6, // 60% remaining to buy
+                initialBuyPercentage: 40,
+                nextBuyPercentage: 30,
+                buyPhase: 1,
+                maxBuyPhases: 3,
+                phaseTriggers: [
+                  { phase: 2, priceDropPercentage: 5 },  // Buy more at 5% drop
+                  { phase: 3, priceDropPercentage: 15 }  // Buy more at 15% drop
+                ],
+                phases: [
+                  { phase: 1, percentage: 40, executed: true, executedAt: new Date() },
+                  { phase: 2, percentage: 30, executed: false },
+                  { phase: 3, percentage: 30, executed: false }
+                ]
+              },
+              partialTakeProfitLevels: [
+                { percentage: strategy.partialTakeProfitLevel1 || 30, sellPercentage: 20 },
+                { percentage: strategy.partialTakeProfitLevel2 || 50, sellPercentage: 30 },
+                { percentage: strategy.partialTakeProfitLevel3 || 100, sellPercentage: 40 }
+              ]
+            }
+          );
+          
+          buyResult.positionId = position.id;
+        }
+        
+        return buyResult;
+      }
+      
+      // Real mode implementation
+      logger.info(`Executing buy for token ${tokenMetadata.address}`);
+      
+      // Calculate position size based on strategy
+      const totalPositionSizeSOL = strategy.positionSizeSOL || 0.1;
+      
+      // Scale-in approach: First buy is 40% of total position
+      const initialBuySize = totalPositionSizeSOL * 0.4;
+      
+      // Execute the buy transaction using Jupiter client
+      if (!this.jupiterClient) {
+        throw new Error('Jupiter client not initialized');
+      }
+      
+      const buyResult = await this.jupiterClient.executeSwap(
+        'SOL',
+        tokenMetadata.address,
+        initialBuySize,
+        this.wallet,
+        {
+          slippage: strategy.slippagePercentage || 1,
+          skipPreflight: true,  // Skip preflight for faster execution on initial buy
+          priorityFee: 75000,   // Higher priority for initial entry
+          maxRetries: 3
+        }
+      );
+      
+      if (!buyResult.success) {
+        throw new Error(`Buy failed: ${buyResult.error}`);
+      }
+      
+      // Calculate token amount received
+      const tokenAmount = parseFloat(buyResult.outAmount);
+      
+      // Add position to position manager with scale-in info
+      if (this.positionManager) {
+        const position = this.positionManager.addPosition(
+          tokenMetadata.address,
+          tokenMetadata.price,
+          tokenAmount,
+          {
+            stopLoss: strategy.stopLossPercentage || 15,
+            takeProfit: strategy.takeProfitPercentage || 50,
+            trailingStop: strategy.trailingStopPercentage || 12,
+            maxHoldTime: strategy.maxHoldTimeMinutes || 240,  // 4 hours by default
+            scaleInInfo: {
+              enabled: true,
+              totalPositionSizeSOL,
+              remainingPositionSizeSOL: totalPositionSizeSOL * 0.6, // 60% remaining to buy
+              initialBuyPercentage: 40,
+              nextBuyPercentage: 30,
+              buyPhase: 1,
+              maxBuyPhases: 3,
+              phaseTriggers: [
+                { phase: 2, priceDropPercentage: 5 },  // Buy more at 5% drop
+                { phase: 3, priceDropPercentage: 15 }  // Buy more at 15% drop
+              ],
+              phases: [
+                { phase: 1, percentage: 40, executed: true, executedAt: new Date() },
+                { phase: 2, percentage: 30, executed: false },
+                { phase: 3, percentage: 30, executed: false }
+              ]
+            },
+            partialTakeProfitLevels: [
+              { percentage: strategy.partialTakeProfitLevel1 || 30, sellPercentage: 20 },
+              { percentage: strategy.partialTakeProfitLevel2 || 50, sellPercentage: 30 },
+              { percentage: strategy.partialTakeProfitLevel3 || 100, sellPercentage: 40 }
+            ]
+          }
+        );
+        
+        buyResult.positionId = position.id;
+      }
+      
+      // Enhance buy result with scale-in info
+      const enhancedResult = {
+        ...buyResult,
+        isScaleIn: true,
+        buyPhase: 1,
+        totalPositionSizeSOL,
+        price: tokenMetadata.price
+      };
+      
+      return enhancedResult;
+    } catch (error) {
+      logger.error(`Error executing buy: ${error.message}`);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * Execute subsequent scale-in buy for a position
+   * @param {string} positionId - Position ID
+   * @returns {Promise<Object>} Buy result
+   */
+  async executeScaleInBuy(positionId) {
+    try {
+      if (!this.positionManager) {
+        throw new Error('Position manager not initialized');
+      }
+      
+      // Get position
+      const position = this.positionManager.getPosition(positionId);
+      if (!position) {
+        throw new Error(`Position ${positionId} not found`);
+      }
+      
+      // Check if scale-in is enabled and there are remaining phases
+      if (!position.scaleInInfo || !position.scaleInInfo.enabled) {
+        throw new Error('Scale-in not enabled for this position');
+      }
+      
+      const scaleInInfo = position.scaleInInfo;
+      const currentPhase = scaleInInfo.buyPhase;
+      const nextPhase = currentPhase + 1;
+      
+      if (nextPhase > scaleInInfo.maxBuyPhases) {
+        throw new Error('All scale-in phases already executed');
+      }
+      
+      // Find the next phase info
+      const nextPhaseInfo = scaleInInfo.phases.find(p => p.phase === nextPhase);
+      if (!nextPhaseInfo || nextPhaseInfo.executed) {
+        throw new Error(`Invalid phase ${nextPhase} or already executed`);
+      }
+      
+      // Calculate buy amount for this phase
+      const buyPercentage = nextPhaseInfo.percentage;
+      const buyAmountSOL = scaleInInfo.totalPositionSizeSOL * (buyPercentage / 100);
+      
+      logger.info(`Executing phase ${nextPhase} scale-in buy for position ${positionId}, amount: ${buyAmountSOL} SOL (${buyPercentage}% of total position)`);
+      
+      let buyResult;
+      
+      if (!this.wallet || this.wallet.demoMode) {
+        // Demo mode simulation
+        buyResult = {
+          success: true,
+          transactionHash: `demo_tx_scale_${Date.now().toString(16)}`,
+          amount: buyAmountSOL,
+          tokenAmount: buyAmountSOL / position.currentPrice * 1000, // Simulated token amount
+          price: position.currentPrice,
+          timestamp: Date.now(),
+          isScaleIn: true,
+          buyPhase: nextPhase
+        };
+      } else {
+        // Real execution
+        if (!this.jupiterClient) {
+          throw new Error('Jupiter client not initialized');
+        }
+        
+        // Execute the buy transaction
+        buyResult = await this.jupiterClient.executeSwap(
+          'SOL',
+          position.tokenAddress,
+          buyAmountSOL,
+          this.wallet,
+          {
+            slippage: 2,  // Higher slippage for scale-in buys (potentially volatile)
+            skipPreflight: false,
+            priorityFee: 50000,  // Medium priority for scale-in buys
+            maxRetries: 3
+          }
+        );
+        
+        if (!buyResult.success) {
+          throw new Error(`Scale-in buy failed: ${buyResult.error}`);
+        }
+      }
+      
+      // Update position with new tokens from scale-in
+      const tokenAmount = buyResult.tokenAmount || (buyAmountSOL / position.currentPrice * 1000);
+      const updatedAmount = position.amount + tokenAmount;
+      
+      // Update scale-in info
+      nextPhaseInfo.executed = true;
+      nextPhaseInfo.executedAt = new Date();
+      scaleInInfo.buyPhase = nextPhase;
+      scaleInInfo.remainingPositionSizeSOL -= buyAmountSOL;
+      
+      if (nextPhase < scaleInInfo.maxBuyPhases) {
+        const nextNextPhase = nextPhase + 1;
+        const nextNextPhaseInfo = scaleInInfo.phases.find(p => p.phase === nextNextPhase);
+        if (nextNextPhaseInfo) {
+          scaleInInfo.nextBuyPercentage = nextNextPhaseInfo.percentage;
+        }
+      } else {
+        scaleInInfo.nextBuyPercentage = 0;
+      }
+      
+      // Update the position
+      this.positionManager.updatePosition(positionId, {
+        amount: updatedAmount,
+        amountRemaining: position.amountRemaining + tokenAmount,
+        scaleInInfo,
+        lastScaleInAt: new Date()
+      });
+      
+      // Log and return result
+      logger.info(`Scale-in buy executed for position ${positionId}, phase ${nextPhase}, added ${tokenAmount} tokens`);
+      
+      return {
+        ...buyResult,
+        positionId,
+        phase: nextPhase,
+        tokenAmount,
+        updatedAmount
+      };
+    } catch (error) {
+      logger.error(`Error executing scale-in buy: ${error.message}`);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * Manage positions - check for scale-in opportunities, trailing stops, etc.
+   * @returns {Promise<void>}
+   */
+  async managePositions() {
+    try {
+      if (!this.positionManager) {
+        logger.warn('Position manager not initialized, cannot manage positions');
+        return;
+      }
+      
+      const openPositions = this.positionManager.getOpenPositions();
+      logger.debug(`Managing ${openPositions.length} open positions`);
+      
+      for (const position of openPositions) {
+        try {
+          // Skip positions without scale-in info
+          if (!position.scaleInInfo || !position.scaleInInfo.enabled) {
+            continue;
+          }
+          
+          // Get current price
+          let currentPrice = -1;
+          try {
+            currentPrice = await this.positionManager.getTokenPrice(position.tokenAddress);
+          } catch (priceError) {
+            logger.warn(`Error getting price for ${position.tokenAddress}: ${priceError.message}`);
+            continue;
+          }
+          
+          if (currentPrice <= 0) {
+            logger.warn(`Invalid price (${currentPrice}) for ${position.tokenAddress}, skipping position management`);
+            continue;
+          }
+          
+          // Calculate price change since entry
+          const priceChangePercent = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
+          
+          // Update position with current price for reference
+          this.positionManager.updatePosition(position.id, { currentPrice });
+          
+          // Check for scale-in opportunities
+          const scaleInInfo = position.scaleInInfo;
+          
+          // Only check if there are remaining phases
+          if (scaleInInfo.buyPhase < scaleInInfo.maxBuyPhases) {
+            const nextPhase = scaleInInfo.buyPhase + 1;
+            const phaseTrigger = scaleInInfo.phaseTriggers.find(t => t.phase === nextPhase);
+            
+            if (phaseTrigger && priceChangePercent <= -phaseTrigger.priceDropPercentage) {
+              logger.info(`Scale-in trigger detected for position ${position.id}: price dropped ${Math.abs(priceChangePercent).toFixed(2)}%, executing phase ${nextPhase} buy`);
+              
+              // Execute scale-in buy
+              await this.executeScaleInBuy(position.id);
+            }
+          }
+        } catch (posError) {
+          logger.error(`Error managing position ${position.id}: ${posError.message}`);
+        }
+      }
+    } catch (error) {
+      logger.error(`Error managing positions: ${error.message}`);
+    }
+  }
 }
 
 module.exports = AutoTrader; 
