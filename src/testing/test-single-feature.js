@@ -17,6 +17,7 @@ const fs = require('fs');
 const path = require('path');
 const solanaClient = require('../utils/solana');
 const logger = require('../utils/logger');
+const AutoTrader = require('../trading/auto-trader');
 
 // Default test configuration
 const TEST_CONFIG = {
@@ -57,13 +58,23 @@ async function createTestPosition(featureType) {
   try {
     await solanaClient.init({
       network: 'testnet',
-      privateKey: process.env.WALLET_PRIVATE_KEY,
+      // SolanaClient reads private key from env vars
       demoMode: process.env.TEST_MODE === 'demo', // Use testnet with real wallet unless demo mode
     });
     
     // Get position manager and auto trader
-    const positionManager = solanaClient.getPositionManager();
-    const autoTrader = solanaClient.getAutoTrader();
+    const positionManager = solanaClient.positionManager;
+    
+    // Create or get auto trader instance
+    let autoTrader;
+    if (solanaClient.tokenSniper && solanaClient.tokenSniper.autoTrader) {
+      autoTrader = solanaClient.tokenSniper.autoTrader;
+    } else {
+      autoTrader = new AutoTrader(solanaClient.connection, solanaClient.walletManager, positionManager);
+      if (solanaClient.jupiterClient) {
+        autoTrader.setJupiterClient(solanaClient.jupiterClient);
+      }
+    }
     
     // Create position with appropriate settings for this feature test
     let testSettings = {};
@@ -186,7 +197,12 @@ async function monitorPosition(positionId) {
   logger.info(`Monitoring position ${positionId}...`);
   
   // Get position manager
-  const positionManager = solanaClient.getPositionManager();
+  const positionManager = solanaClient.positionManager;
+  
+  if (!positionManager) {
+    logger.error('❌ Position manager not initialized! Cannot monitor position.');
+    return;
+  }
   
   // Add enhanced logging
   const originalProcessPosition = positionManager.processPosition;
@@ -238,7 +254,11 @@ async function monitorPosition(positionId) {
   
   // Check status every 10 seconds
   const checkInterval = setInterval(() => {
-    const positions = positionManager.getPositions();
+    // Access positions directly from position manager
+    const positions = positionManager.getPositions ? 
+                      positionManager.getPositions() : 
+                      positionManager.positions || [];
+                      
     const position = positions.find(p => p.id === positionId);
     
     if (!position) {

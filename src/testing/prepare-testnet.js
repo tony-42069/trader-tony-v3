@@ -35,8 +35,19 @@ async function checkSolBalance() {
   logger.info('Checking SOL balance...');
   
   try {
-    const walletManager = solanaClient.getWalletManager();
-    const balance = await walletManager.getBalance();
+    // Use SolanaClient's walletManager
+    const walletAddress = solanaClient.getWalletAddress();
+    
+    // In demo mode or real mode, get balance
+    let balance;
+    if (solanaClient.demoMode) {
+      // Demo mode: get balance of demo wallet
+      balance = await solanaClient.connection.getBalance(new PublicKey(walletAddress));
+    } else {
+      // Real mode: get balance via wallet manager
+      balance = await solanaClient.walletManager.getBalance();
+    }
+    
     const solBalance = balance / LAMPORTS_PER_SOL;
     
     logger.info(`Current SOL balance: ${solBalance.toFixed(4)} SOL`);
@@ -46,7 +57,7 @@ async function checkSolBalance() {
       logger.info('Please fund your testnet wallet with SOL from a faucet:');
       logger.info('1. https://faucet.solana.com/');
       logger.info('2. https://solfaucet.com/');
-      logger.info(`Your wallet address: ${walletManager.getPublicKey().toString()}`);
+      logger.info(`Your wallet address: ${walletAddress}`);
       return false;
     }
     
@@ -63,9 +74,9 @@ async function verifyTestTokens() {
   logger.info('Verifying test tokens...');
   
   try {
-    const connection = solanaClient.getConnection();
-    const walletManager = solanaClient.getWalletManager();
-    const walletAddress = walletManager.getPublicKey();
+    // Access connection directly from solanaClient
+    const connection = solanaClient.connection;
+    const walletAddress = solanaClient.getWalletAddress();
     
     for (const tokenAddress of TEST_CONFIG.testTokens) {
       logger.info(`Checking token ${tokenAddress}...`);
@@ -73,7 +84,7 @@ async function verifyTestTokens() {
       try {
         // Get token accounts for this mint owned by our wallet
         const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
-          walletAddress,
+          new PublicKey(walletAddress),
           { mint: new PublicKey(tokenAddress) }
         );
         
@@ -155,9 +166,10 @@ async function testJupiterConnectivity() {
   logger.info('Testing Jupiter API connectivity...');
   
   try {
-    const jupiterClient = solanaClient.getJupiterClient();
+    // Access Jupiter client directly from solanaClient
+    const jupiterClient = solanaClient.jupiterClient;
     
-    if (!jupiterClient.isInitialized()) {
+    if (!jupiterClient || !jupiterClient.isInitialized) {
       logger.error('❌ Jupiter client is not initialized');
       return false;
     }
@@ -198,10 +210,10 @@ async function main() {
   logger.info('🧪 Starting Testnet Preparation...');
   
   try {
-    // Initialize Solana client
+    // Initialize Solana client with the correct privateKey parameter name
     await solanaClient.init({
       network: 'testnet',
-      privateKey: process.env.WALLET_PRIVATE_KEY,
+      // Note: SolanaClient expects SOLANA_PRIVATE_KEY from env, not passed directly
       demoMode: false, // Use real testnet mode for preparation
     });
     

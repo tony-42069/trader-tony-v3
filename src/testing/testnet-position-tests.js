@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const solanaClient = require('../utils/solana');
 const logger = require('../utils/logger');
+const AutoTrader = require('../trading/auto-trader');
 
 // Test configuration
 const TEST_CONFIG = {
@@ -58,15 +59,26 @@ async function createTestPosition(type) {
   logger.info(`Creating test position for ${type} test`);
   
   try {
+    // Initialize Solana client
     await solanaClient.init({
       network: 'testnet',
-      privateKey: process.env.WALLET_PRIVATE_KEY,
+      // SolanaClient reads the private key from env vars, so we don't pass it directly
       demoMode: false, // Use testnet with a real wallet
     });
     
-    // Get token metadata
-    const positionManager = solanaClient.getPositionManager();
-    const autoTrader = solanaClient.getAutoTrader();
+    // Get position manager and auto trader
+    const positionManager = solanaClient.positionManager;
+    
+    // Create or get auto trader instance
+    let autoTrader;
+    if (solanaClient.tokenSniper && solanaClient.tokenSniper.autoTrader) {
+      autoTrader = solanaClient.tokenSniper.autoTrader;
+    } else {
+      autoTrader = new AutoTrader(solanaClient.connection, solanaClient.walletManager, positionManager);
+      if (solanaClient.jupiterClient) {
+        autoTrader.setJupiterClient(solanaClient.jupiterClient);
+      }
+    }
     
     // Create a position with the appropriate settings for this test
     let testSettings = {};
@@ -187,12 +199,18 @@ async function runTests() {
     // Initialize Solana client
     await solanaClient.init({
       network: 'testnet',
-      privateKey: process.env.WALLET_PRIVATE_KEY,
+      // SolanaClient reads the private key from env vars
       demoMode: false, // Use testnet with a real wallet
     });
     
     // Set up extra logging for tests
-    const positionManager = solanaClient.getPositionManager();
+    const positionManager = solanaClient.positionManager;
+    
+    if (!positionManager) {
+      logger.error('❌ Position manager not initialized! Cannot continue tests.');
+      return;
+    }
+    
     const originalProcessPosition = positionManager.processPosition;
     
     // Enhance position manager with extra logging
@@ -284,7 +302,11 @@ async function runTests() {
     
     // Check status every 30 seconds
     const checkInterval = setInterval(() => {
-      const positions = positionManager.getPositions();
+      // Access positions directly from position manager
+      const positions = positionManager.getPositions ? 
+                        positionManager.getPositions() : 
+                        positionManager.positions || [];
+      
       logger.info(`Current positions: ${positions.length}`);
       
       if (positions.length === 0) {
