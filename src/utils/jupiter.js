@@ -5,7 +5,8 @@ const {
   VersionedTransaction, 
   TransactionMessage,
   Connection,
-  LAMPORTS_PER_SOL
+  LAMPORTS_PER_SOL,
+  ComputeBudgetProgram
 } = require('@solana/web3.js');
 const logger = require('./logger');
 
@@ -112,21 +113,6 @@ class JupiterClient {
       let swapTransaction;
       const rawTransaction = Buffer.from(quoteResult.swapTransaction, 'base64');
       
-      if (options.useVersionedTransaction) {
-        // For versioned transactions (future support)
-        swapTransaction = VersionedTransaction.deserialize(rawTransaction);
-      } else {
-        // For legacy transactions
-        swapTransaction = Transaction.from(rawTransaction);
-      }
-      
-      // 3. Sign and send transaction
-      logger.info('Signing and sending swap transaction...');
-      
-      if (this.connection.rpcEndpoint.includes('devnet')) {
-        logger.warn('WARNING: Executing swap on devnet. This is not recommended for real trades.');
-      }
-      
       // Demo mode check - don't actually execute if in demo mode
       if (wallet.demoMode) {
         logger.info('Demo mode: Not executing actual transaction');
@@ -143,37 +129,151 @@ class JupiterClient {
       
       const {
         skipPreflight = false,
-        maxRetries = 2
+        maxRetries = 2,
+        priorityFee = 50000, // 50,000 micro-lamports per CU
+        computeUnits = 200000, // 200,000 is the default compute unit limit
+        useVersionedTransaction = false
       } = options;
-      
-      // Real execution
-      const signature = await wallet.sendTransaction(
-        swapTransaction, 
-        this.connection,
-        { skipPreflight, maxRetries }
-      );
-      
-      logger.info(`Swap transaction sent with signature: ${signature}`);
-      
-      // 4. Confirm transaction
-      const confirmation = await this.connection.confirmTransaction(signature, 'confirmed');
-      
-      if (confirmation.value.err) {
-        throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
+
+      if (useVersionedTransaction) {
+        // For versioned transactions (future support)
+        swapTransaction = VersionedTransaction.deserialize(rawTransaction);
+      } else {
+        // For legacy transactions
+        swapTransaction = Transaction.from(rawTransaction);
+        
+        // Add compute budget instruction for priority fee (only for legacy transactions)
+        // Note: For versioned transactions, Jupiter's quote API should already include this
+        swapTransaction.instructions.unshift(
+          ComputeBudgetProgram.setComputeUnitLimit({
+            units: computeUnits
+          }),
+          ComputeBudgetProgram.setComputeUnitPrice({
+            microLamports: priorityFee
+          })
+        );
+        
+        // Get a fresh blockhash
+        const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash('confirmed');
+        swapTransaction.recentBlockhash = blockhash;
+        swapTransaction.feePayer = new PublicKey(wallet.getPublicKey());
       }
       
-      logger.info(`Swap successfully confirmed: ${signature}`);
+      // 3. Sign and send transaction
+      logger.info(`Signing and sending swap transaction with priority fee: ${priorityFee} microLamports per CU`);
       
-      return {
-        success: true,
-        signature,
-        inAmount: quoteResult.inAmount,
-        outAmount: quoteResult.outAmount,
-        priceImpactPct: quoteResult.priceImpactPct,
-        route: quoteResult.routePlan,
-        inputMint: quoteResult.inputMint,
-        outputMint: quoteResult.outputMint
-      };
+      if (this.connection.rpcEndpoint.includes('devnet')) {
+        logger.warn('WARNING: Executing swap on devnet. This is not recommended for real trades.');
+      }
+      
+      // Real execution with improved error handling and confirmation
+      let signature;
+      try {
+        // Send transaction
+        signature = await wallet.sendTransaction(
+          swapTransaction, 
+          this.connection,
+          { 
+            skipPreflight, 
+            maxRetries,
+            priorityFee,
+            computeUnits,
+            commitment: 'confirmed' 
+          }
+        );
+        
+        logger.info(`Swap transaction sent with signature: ${signature}`);
+      } catch (sendError) {
+        logger.error(`Error sending transaction: ${sendError.message}`);
+        return {
+          success: false,
+          error: `Transaction sending failed: ${sendError.message}`,
+          inputMint,
+          outputMint,
+          phase: 'send'
+        };
+      }
+      
+      // 4. Confirm transaction with improved handling
+      try {
+        // Wait for confirmation with timeout
+        const confirmationPromise = this.connection.confirmTransaction({
+          signature,
+          blockhash: swapTransaction.recentBlockhash,
+          lastValidBlockHeight: lastValidBlockHeight
+        }, 'confirmed');
+        
+        // Create a timeout promise
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Transaction confirmation timeout')), 60000); // 60 second timeout
+        });
+        
+        // Race the confirmation against the timeout
+        const confirmation = await Promise.race([confirmationPromise, timeoutPromise]);
+        
+        if (confirmation.value?.err) {
+          const errorMsg = typeof confirmation.value.err === 'string' 
+            ? confirmation.value.err 
+            : JSON.stringify(confirmation.value.err);
+          
+          throw new Error(`Transaction failed: ${errorMsg}`);
+        }
+        
+        logger.info(`Swap successfully confirmed: ${signature}`);
+        
+        // 5. Return successful result with detailed information
+        return {
+          success: true,
+          signature,
+          inAmount: quoteResult.inAmount,
+          outAmount: quoteResult.outAmount,
+          priceImpactPct: quoteResult.priceImpactPct,
+          route: quoteResult.routePlan,
+          inputMint: quoteResult.inputMint,
+          outputMint: quoteResult.outputMint,
+          slippage: options.slippage || 0.5,
+          timestamp: Date.now()
+        };
+      } catch (confirmError) {
+        // For confirmation errors, we'll check if transaction was actually successful
+        // Sometimes RPC nodes disconnect during confirmation, but tx still goes through
+        try {
+          logger.warn(`Confirmation error: ${confirmError.message}. Checking transaction status...`);
+          const status = await this.connection.getSignatureStatus(signature);
+          
+          if (status && status.value && !status.value.err) {
+            logger.info(`Transaction actually succeeded despite confirmation error: ${signature}`);
+            return {
+              success: true,
+              signature,
+              confirmationError: confirmError.message,
+              inAmount: quoteResult.inAmount,
+              outAmount: quoteResult.outAmount,
+              inputMint: quoteResult.inputMint,
+              outputMint: quoteResult.outputMint,
+              timestamp: Date.now()
+            };
+          }
+          
+          // If we get here, transaction really did fail
+          const errorDetails = status && status.value && status.value.err 
+            ? JSON.stringify(status.value.err) 
+            : confirmError.message;
+          
+          throw new Error(`Transaction confirmation failed: ${errorDetails}`);
+        } catch (statusCheckError) {
+          logger.error(`Failed to check transaction status: ${statusCheckError.message}`);
+          return {
+            success: false,
+            error: `Transaction confirmation failed: ${confirmError.message}`,
+            maybeSucceeded: true, // We're not sure if it failed or not
+            signature,
+            inputMint,
+            outputMint,
+            phase: 'confirm'
+          };
+        }
+      }
     } catch (error) {
       logger.error(`Swap execution failed: ${error.message}`);
       
@@ -181,7 +281,8 @@ class JupiterClient {
         success: false,
         error: error.message || 'Unknown error during swap execution',
         inputMint,
-        outputMint
+        outputMint,
+        phase: 'unknown'
       };
     }
   }
@@ -201,21 +302,67 @@ class JupiterClient {
       // Special sniping options with more aggressive defaults
       const snipeOptions = {
         slippage: options.slippage || 5, // Higher default slippage for sniping
-        skipPreflight: options.skipPreflight !== false, // Default to true for sniping
+        skipPreflight: options.hasOwnProperty('skipPreflight') ? options.skipPreflight : true, // Default to true for sniping
         maxRetries: options.maxRetries || 3,
-        onlyDirectRoutes: options.onlyDirectRoutes || false, // Could be true for faster execution
+        onlyDirectRoutes: options.hasOwnProperty('onlyDirectRoutes') ? options.onlyDirectRoutes : true, // Default to true for faster execution
         useVersionedTransaction: false, // Stick with legacy transactions for compatibility
+
+        // Snipes need higher priority fees to compete
+        priorityFee: options.priorityFee || 100000, // 100,000 microLamports for snipes (higher priority)
+        computeUnits: options.computeUnits || 200000,
+        
+        // Additional info for tracking
+        isSnipe: true,
+        snipeTimestamp: Date.now(),
+        
         ...options
       };
       
-      // Execute swap from SOL to token
-      return await this.executeSwap('SOL', tokenMint, amountInSol, wallet, snipeOptions);
+      // Log snipe attempt with detailed info
+      logger.info(`Snipe configuration: ${JSON.stringify({
+        tokenMint,
+        amountInSol,
+        slippage: snipeOptions.slippage,
+        priorityFee: snipeOptions.priorityFee,
+        skipPreflight: snipeOptions.skipPreflight,
+        onlyDirectRoutes: snipeOptions.onlyDirectRoutes
+      })}`);
+      
+      // Execute swap from SOL to token with optimized settings
+      const result = await this.executeSwap('SOL', tokenMint, amountInSol, wallet, snipeOptions);
+      
+      // Enhance the result with snipe-specific info
+      if (result.success) {
+        result.isSnipe = true;
+        result.snipeTimestamp = snipeOptions.snipeTimestamp;
+        
+        // Calculate execution time
+        result.executionTimeMs = Date.now() - snipeOptions.snipeTimestamp;
+        logger.info(`Snipe successful! Execution time: ${result.executionTimeMs}ms`);
+        
+        // If this was a real transaction, store the snipe in the DB or another persistent store
+        // For demo mode, we'd just log it
+        if (!wallet.demoMode && result.signature) {
+          logger.info(`Real snipe completed with signature: ${result.signature}`);
+          // Here you would store the snipe data
+        }
+      } else {
+        // Detailed logging for failed snipes
+        logger.error(`Snipe failed: ${result.error}, phase: ${result.phase || 'unknown'}`);
+        result.isSnipe = true;
+        result.snipeTimestamp = snipeOptions.snipeTimestamp;
+        result.executionTimeMs = Date.now() - snipeOptions.snipeTimestamp;
+      }
+      
+      return result;
     } catch (error) {
       logger.error(`Snipe operation failed: ${error.message}`);
       return {
         success: false,
         error: error.message,
-        tokenMint
+        tokenMint,
+        isSnipe: true,
+        snipeTimestamp: Date.now()
       };
     }
   }
