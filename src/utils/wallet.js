@@ -6,6 +6,8 @@ class WalletManager {
   constructor(connection) {
     this.connection = connection;
     this.wallet = null;
+    this.demoMode = false;
+    this.demoBalance = 10;
   }
 
   loadWalletFromPrivateKey(privateKeyBase58) {
@@ -19,12 +21,31 @@ class WalletManager {
   }
 
   async getBalance() {
+    if (this.demoMode) {
+      return this.demoBalance;
+    }
+    
     if (!this.wallet) throw new Error('Wallet not loaded');
     const balance = await this.connection.getBalance(this.wallet.publicKey);
     return balance / LAMPORTS_PER_SOL;
   }
 
   async getTokenBalances() {
+    if (this.demoMode) {
+      return [
+        {
+          mint: 'So11111111111111111111111111111111111111112',
+          balance: this.demoBalance,
+          decimals: 9
+        },
+        {
+          mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+          balance: 100,
+          decimals: 6
+        }
+      ];
+    }
+    
     if (!this.wallet) throw new Error('Wallet not loaded');
     
     const tokenAccounts = await this.connection.getParsedTokenAccountsByOwner(
@@ -43,6 +64,10 @@ class WalletManager {
   }
 
   getPublicKey() {
+    if (this.demoMode) {
+      const demoWalletAddress = process.env.DEMO_WALLET_ADDRESS || '2PS57B26Sh5Xa22dPSEt9bRgP5FhNsoyFvGUV8t5X232';
+      return demoWalletAddress;
+    }
     return this.wallet ? this.wallet.publicKey.toString() : null;
   }
 

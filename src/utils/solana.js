@@ -43,6 +43,7 @@ class SolanaClient {
       if (process.env.DEMO_MODE === 'true') {
         // Use demo wallet with predefined address
         this.demoMode = true;
+        this.walletManager.demoMode = true; // Ensure wallet manager also has demo mode set
         this.demoWalletAddress = process.env.DEMO_WALLET_ADDRESS || '2PS57B26Sh5Xa22dPSEt9bRgP5FhNsoyFvGUV8t5X232';
         logger.info(`Demo mode enabled with wallet address: ${this.demoWalletAddress}`);
       }
@@ -54,6 +55,7 @@ class SolanaClient {
         } catch (error) {
           logger.error(`Failed to load wallet from private key: ${error.message}`);
           this.demoMode = true;
+          this.walletManager.demoMode = true; // Set demo mode on wallet manager
           logger.info('Falling back to demo mode due to wallet initialization failure');
         }
       } else {
@@ -61,6 +63,7 @@ class SolanaClient {
         if (process.env.WALLET_ADDRESS) {
           // Using real wallet address but in read-only mode (can't sign transactions)
           this.demoMode = true; // Still demo mode since we can't make real transactions
+          this.walletManager.demoMode = true; // Set demo mode on wallet manager
           this.readOnlyMode = true; // But we're using a real wallet, so some features can work
           this.demoWalletAddress = process.env.WALLET_ADDRESS;
           logger.info(`Using real wallet address in read-only mode: ${this.demoWalletAddress}`);
@@ -77,6 +80,7 @@ class SolanaClient {
         } else {
           // No wallet address specified, use demo mode
           this.demoMode = true;
+          this.walletManager.demoMode = true; // Set demo mode on wallet manager
           this.readOnlyMode = false;
           this.demoWalletAddress = process.env.DEMO_WALLET_ADDRESS || '2PS57B26Sh5Xa22dPSEt9bRgP5FhNsoyFvGUV8t5X232';
           logger.info('No private key or wallet address provided, using demo mode');
