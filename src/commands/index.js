@@ -778,6 +778,508 @@ const handleDeleteStrategy = async (ctx, strategyId) => {
   }
 };
 
+/**
+ * Handle token_analysis callback
+ * @param {Object} ctx - Telegram context
+ */
+const handleTokenAnalysis = async (ctx) => {
+  try {
+    logger.info('Token analysis menu requested');
+    
+    // Show token analysis menu
+    return ctx.editMessageText('🔍 *Token Analysis*\n\nAnalyze any Solana token for risks, liquidity, and more. Get detailed reports on token safety and potential red flags.', {
+      parse_mode: 'Markdown',
+      ...keyboards.tokenAnalysisKeyboard
+    });
+  } catch (error) {
+    logger.error(`Error in handleTokenAnalysis: ${error.message}`);
+    return ctx.reply('❌ Error displaying token analysis menu. Please try again later.');
+  }
+};
+
+/**
+ * Handle analyze_token callback
+ * @param {Object} ctx - Telegram context
+ */
+const handleAnalyzeToken = async (ctx) => {
+  try {
+    logger.info('Token analysis requested');
+    
+    // Ask for token address
+    await ctx.editMessageText('🔍 *Analyze Token*\n\nPlease enter the Solana token address you want to analyze:', {
+      parse_mode: 'Markdown',
+      ...keyboards.backToMainKeyboard
+    });
+    
+    // Set user state to wait for token address
+    ctx.session.state = 'waiting_for_token_address';
+    
+    return;
+  } catch (error) {
+    logger.error(`Error in handleAnalyzeToken: ${error.message}`);
+    return ctx.reply('❌ Error starting token analysis. Please try again later.');
+  }
+};
+
+/**
+ * Process token address input for analysis
+ * @param {Object} ctx - Telegram context
+ * @param {string} text - User input (token address)
+ */
+const processTokenAddress = async (ctx, text) => {
+  try {
+    const tokenAddress = text.trim();
+    logger.info(`Processing token address for analysis: ${tokenAddress}`);
+    
+    // Show loading message
+    const loadingMessage = await ctx.reply('⏳ Analyzing token... This may take a few seconds.');
+    
+    // Reset state
+    ctx.session.state = null;
+    
+    try {
+      // Perform token analysis
+      const tokenAnalysis = await solanaClient.autoTrader.analyzeToken(tokenAddress);
+      
+      if (!tokenAnalysis) {
+        await ctx.telegram.editMessageText(
+          ctx.chat.id,
+          loadingMessage.message_id,
+          null,
+          '❌ Invalid token address or token could not be analyzed.',
+          keyboards.backToMainKeyboard
+        );
+        return;
+      }
+      
+      // Store the analysis in session for later reference
+      if (!ctx.session.recentAnalyses) {
+        ctx.session.recentAnalyses = [];
+      }
+      ctx.session.recentAnalyses.unshift({
+        tokenAddress,
+        tokenName: tokenAnalysis.name,
+        tokenSymbol: tokenAnalysis.symbol,
+        riskScore: tokenAnalysis.potentialRisk,
+        timestamp: Date.now()
+      });
+      
+      // Keep only the 10 most recent analyses
+      if (ctx.session.recentAnalyses.length > 10) {
+        ctx.session.recentAnalyses = ctx.session.recentAnalyses.slice(0, 10);
+      }
+      
+      // Format the analysis report
+      const reportText = formatTokenAnalysisReport(tokenAnalysis);
+      
+      // Create keyboard for further actions
+      const actionsKeyboard = {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: 'Buy Token', callback_data: `buy_analyzed_${tokenAddress}` },
+              { text: 'View on Solscan', url: `https://solscan.io/token/${tokenAddress}` }
+            ],
+            [
+              { text: '🛡️ Detail Risk Analysis', callback_data: `token_risk_${tokenAddress}` }
+            ],
+            [
+              { text: '« Back to Token Analysis', callback_data: 'token_analysis' }
+            ]
+          ]
+        }
+      };
+      
+      // Send the analysis report
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        loadingMessage.message_id,
+        null,
+        reportText,
+        {
+          parse_mode: 'Markdown',
+          disable_web_preview: true,
+          ...actionsKeyboard
+        }
+      );
+    } catch (error) {
+      logger.error(`Error analyzing token: ${error.message}`);
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        loadingMessage.message_id,
+        null,
+        `❌ Error analyzing token: ${error.message}`,
+        keyboards.backToMainKeyboard
+      );
+    }
+  } catch (error) {
+    logger.error(`Error in processTokenAddress: ${error.message}`);
+    await ctx.reply('❌ Error processing token address. Please try again later.');
+  }
+};
+
+/**
+ * Format token analysis report
+ * @param {Object} analysis - Token analysis data
+ * @returns {string} Formatted report
+ */
+const formatTokenAnalysisReport = (analysis) => {
+  try {
+    let riskLevel = 'Unknown';
+    let riskEmoji = '❓';
+    
+    if (analysis.potentialRisk < 20) {
+      riskLevel = 'Low Risk';
+      riskEmoji = '🟢';
+    } else if (analysis.potentialRisk < 50) {
+      riskLevel = 'Medium Risk';
+      riskEmoji = '🟡';
+    } else if (analysis.potentialRisk < 80) {
+      riskLevel = 'High Risk';
+      riskEmoji = '🟠';
+    } else {
+      riskLevel = 'Extreme Risk';
+      riskEmoji = '🔴';
+    }
+    
+    // Format token age
+    let ageText = 'Unknown';
+    if (analysis.tokenAgeMinutes !== undefined) {
+      if (analysis.tokenAgeMinutes < 60) {
+        ageText = `${analysis.tokenAgeMinutes} minutes`;
+      } else if (analysis.tokenAgeMinutes < 1440) {
+        ageText = `${Math.floor(analysis.tokenAgeMinutes / 60)} hours`;
+      } else {
+        ageText = `${Math.floor(analysis.tokenAgeMinutes / 1440)} days`;
+      }
+    }
+    
+    // Format tokens supply with commas
+    const supplyText = analysis.supply ? 
+      parseInt(analysis.supply).toLocaleString() : 'Unknown';
+    
+    let report = `🔍 *Token Analysis Report*\n\n`;
+    report += `*Name:* ${analysis.name}\n`;
+    report += `*Symbol:* ${analysis.symbol}\n`;
+    report += `*Address:* \`${analysis.address}\`\n\n`;
+    
+    report += `*RISK ASSESSMENT:* ${riskEmoji} ${riskLevel} (${analysis.potentialRisk}/100)\n\n`;
+    
+    report += `*🧪 TOKEN DETAILS:*\n`;
+    report += `• Age: ${ageText}\n`;
+    report += `• Supply: ${supplyText}\n`;
+    report += `• Decimals: ${analysis.decimals}\n`;
+    report += `• Type: ${analysis.isMemecoin ? '🐸 Memecoin' : '🧊 Standard Token'}\n\n`;
+    
+    report += `*💰 MARKET DATA:*\n`;
+    report += `• Price: $${analysis.priceUsd ? analysis.priceUsd.toFixed(12) : 'Unknown'}\n`;
+    report += `• Liquidity: ${analysis.initialLiquiditySOL ? analysis.initialLiquiditySOL.toFixed(2) + ' SOL' : 'Unknown'}\n`;
+    report += `• Holders: ${analysis.holderCount || 'Unknown'}\n\n`;
+    
+    report += `*⚠️ SECURITY CHECKS:*\n`;
+    report += `• Mint Authority: ${!analysis.hasMintAuthority ? '✅ None' : '⚠️ Active'}\n`;
+    report += `• Freeze Authority: ${!analysis.hasFreezeAuthority ? '✅ None' : '⚠️ Active'}\n`;
+    report += `• Transfer Tax: ${analysis.transferTaxBps === 0 ? '✅ None' : `⚠️ ${analysis.transferTaxBps / 100}%`}\n`;
+    report += `• LP Tokens Burned: ${analysis.lpTokensBurned ? '✅ Yes' : '⚠️ No'}\n`;
+    report += `• Can Sell: ${analysis.canSell ? '✅ Yes' : '❌ NO (HONEYPOT)'}\n`;
+    report += `• Top Wallet: ${analysis.topHolderPercentage ? analysis.topHolderPercentage.toFixed(1) + '%' : 'Unknown'}\n\n`;
+    
+    report += `*SUMMARY:*\n`;
+    
+    // Generate quick summary based on risk factors
+    if (analysis.potentialRisk >= 80) {
+      report += '❌ This token has critical risk factors and is not recommended for trading.';
+    } else if (analysis.potentialRisk >= 50) {
+      report += '⚠️ This token has significant risk factors. Exercise extreme caution.';
+    } else if (analysis.potentialRisk >= 20) {
+      report += '⚠️ This token has moderate risk factors. Trade with caution.';
+    } else {
+      report += '✅ This token passes basic safety checks. Always do your own research.';
+    }
+    
+    return report;
+  } catch (error) {
+    logger.error(`Error formatting token analysis: ${error.message}`);
+    return `❌ Error formatting analysis report.`;
+  }
+};
+
+/**
+ * Handle recent_analyses callback
+ * @param {Object} ctx - Telegram context
+ */
+const handleRecentAnalyses = async (ctx) => {
+  try {
+    logger.info('Recent token analyses requested');
+    
+    // Check if user has any recent analyses
+    if (!ctx.session.recentAnalyses || ctx.session.recentAnalyses.length === 0) {
+      return ctx.editMessageText('📖 *Recent Analyses*\n\nYou haven\'t analyzed any tokens yet.', {
+        parse_mode: 'Markdown',
+        ...keyboards.tokenAnalysisKeyboard
+      });
+    }
+    
+    // Format recent analyses list
+    let message = '📖 *Recent Analyses*\n\n';
+    
+    ctx.session.recentAnalyses.forEach((analysis, index) => {
+      const date = new Date(analysis.timestamp).toLocaleString();
+      const riskEmoji = analysis.riskScore < 20 ? '🟢' : 
+                        analysis.riskScore < 50 ? '🟡' : 
+                        analysis.riskScore < 80 ? '🟠' : '🔴';
+      
+      message += `${index + 1}. ${analysis.tokenName} (${analysis.tokenSymbol})\n`;
+      message += `   Risk: ${riskEmoji} ${analysis.riskScore}/100\n`;
+      message += `   Date: ${date}\n\n`;
+    });
+    
+    // Create keyboard with options to view detailed reports
+    const inlineKeyboard = ctx.session.recentAnalyses.map((analysis, index) => {
+      return [{
+        text: `View ${analysis.tokenSymbol} Analysis`,
+        callback_data: `view_analysis_${analysis.tokenAddress}`
+      }];
+    });
+    
+    // Add back button
+    inlineKeyboard.push([{
+      text: '« Back to Token Analysis',
+      callback_data: 'token_analysis'
+    }]);
+    
+    return ctx.editMessageText(message, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: inlineKeyboard
+      }
+    });
+  } catch (error) {
+    logger.error(`Error in handleRecentAnalyses: ${error.message}`);
+    return ctx.reply('❌ Error retrieving recent analyses. Please try again later.');
+  }
+};
+
+/**
+ * Handle risk_settings callback
+ * @param {Object} ctx - Telegram context
+ */
+const handleRiskSettings = async (ctx) => {
+  try {
+    logger.info('Token risk settings requested');
+    
+    // Initialize risk settings if not present
+    if (!ctx.session.riskSettings) {
+      ctx.session.riskSettings = {
+        maxRiskScore: 50,
+        requireLpBurned: true,
+        allowMintAuthority: false,
+        allowFreezeAuthority: false,
+        allowTransferTax: false,
+        minLiquiditySol: 5
+      };
+    }
+    
+    const settings = ctx.session.riskSettings;
+    
+    // Format settings message
+    let message = '⚠️ *Risk Analysis Settings*\n\n';
+    message += 'Configure your token risk analysis preferences:\n\n';
+    message += `• Max Risk Score: ${settings.maxRiskScore}/100\n`;
+    message += `• Require LP Burned: ${settings.requireLpBurned ? '✅' : '❌'}\n`;
+    message += `• Allow Mint Authority: ${settings.allowMintAuthority ? '✅' : '❌'}\n`;
+    message += `• Allow Freeze Authority: ${settings.allowFreezeAuthority ? '✅' : '❌'}\n`;
+    message += `• Allow Transfer Tax: ${settings.allowTransferTax ? '✅' : '❌'}\n`;
+    message += `• Min Liquidity: ${settings.minLiquiditySol} SOL\n\n`;
+    message += 'Select an option to change:';
+    
+    // Create settings keyboard
+    const settingsKeyboard = {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: 'Max Risk Score', callback_data: 'set_max_risk' },
+            { text: 'LP Burned', callback_data: 'set_lp_burned' }
+          ],
+          [
+            { text: 'Mint Authority', callback_data: 'set_mint_auth' },
+            { text: 'Freeze Authority', callback_data: 'set_freeze_auth' }
+          ],
+          [
+            { text: 'Transfer Tax', callback_data: 'set_transfer_tax' },
+            { text: 'Min Liquidity', callback_data: 'set_min_liquidity' }
+          ],
+          [
+            { text: '« Back to Token Analysis', callback_data: 'token_analysis' }
+          ]
+        ]
+      }
+    };
+    
+    return ctx.editMessageText(message, {
+      parse_mode: 'Markdown',
+      ...settingsKeyboard
+    });
+  } catch (error) {
+    logger.error(`Error in handleRiskSettings: ${error.message}`);
+    return ctx.reply('❌ Error displaying risk settings. Please try again later.');
+  }
+};
+
+/**
+ * Handle token_risk callback
+ * @param {Object} ctx - Telegram context
+ */
+const handleTokenRiskDetail = async (ctx) => {
+  try {
+    // Extract token address from callback data
+    const callbackData = ctx.callbackQuery.data;
+    const tokenAddress = callbackData.replace('token_risk_', '');
+    
+    logger.info(`Detailed risk analysis requested for token: ${tokenAddress}`);
+    
+    // Show loading message
+    await ctx.editMessageText('⏳ Generating detailed risk report...');
+    
+    try {
+      // Re-analyze token to get latest data
+      const tokenAnalysis = await solanaClient.autoTrader.analyzeToken(tokenAddress);
+      
+      if (!tokenAnalysis) {
+        return ctx.editMessageText('❌ Failed to analyze token for detailed risk report.', 
+          keyboards.backToMainKeyboard);
+      }
+      
+      // Format detailed risk report
+      let report = `🛡️ *Detailed Risk Analysis*\n\n`;
+      report += `*Token:* ${tokenAnalysis.name} (${tokenAnalysis.symbol})\n`;
+      report += `*Overall Risk Score:* ${tokenAnalysis.potentialRisk}/100\n\n`;
+      
+      report += `*RISK BREAKDOWN:*\n\n`;
+      
+      // Mint Authority Risk
+      report += `*Mint Authority:* ${!tokenAnalysis.hasMintAuthority ? '✅ Safe' : '⚠️ Risk'}\n`;
+      if (tokenAnalysis.hasMintAuthority) {
+        report += '• The token creator can mint unlimited new tokens\n';
+        report += '• This can dilute your holdings and crash the price\n';
+        report += '• High risk of "rug pull" through inflation\n\n';
+      } else {
+        report += '• No one can create additional tokens\n';
+        report += '• Token supply is fixed and cannot be inflated\n\n';
+      }
+      
+      // Freeze Authority Risk
+      report += `*Freeze Authority:* ${!tokenAnalysis.hasFreezeAuthority ? '✅ Safe' : '⚠️ Risk'}\n`;
+      if (tokenAnalysis.hasFreezeAuthority) {
+        report += '• Token creator can freeze any wallet\'s tokens\n';
+        report += '• Your tokens could be locked and become untradeable\n';
+        report += '• Significant control risk\n\n';
+      } else {
+        report += '• No one can freeze token transfers\n';
+        report += '• Your tokens cannot be locked by the developer\n\n';
+      }
+      
+      // LP Token Risk
+      report += `*LP Tokens:* ${tokenAnalysis.lpTokensBurned ? '✅ Burned' : '⚠️ Not Burned'}\n`;
+      if (tokenAnalysis.lpTokensBurned) {
+        report += '• Liquidity pool tokens have been burned\n';
+        report += '• Developers cannot remove liquidity (good)\n';
+        report += '• Lower risk of liquidity-based "rug pull"\n\n';
+      } else {
+        report += '• Liquidity pool tokens are not burned\n';
+        report += '• Developers could remove liquidity at any time\n';
+        report += '• High risk of liquidity-based "rug pull"\n\n';
+      }
+      
+      // Honeypot Risk
+      report += `*Sell Testing:* ${tokenAnalysis.canSell ? '✅ Can Sell' : '❌ CANNOT SELL'}\n`;
+      if (tokenAnalysis.canSell) {
+        report += '• Tokens can be sold on DEX\n';
+        report += '• Not detected as a honeypot\n';
+        if (tokenAnalysis.sellImpactPercentage) {
+          report += `• Sell impact: ${tokenAnalysis.sellImpactPercentage.toFixed(2)}%\n\n`;
+        } else {
+          report += '\n';
+        }
+      } else {
+        report += '• CRITICAL: Cannot sell tokens\n';
+        report += '• Detected as a honeypot (DO NOT BUY)\n';
+        report += '• Highest possible risk\n\n';
+      }
+      
+      // Transfer Tax Risk
+      report += `*Transfer Tax:* ${tokenAnalysis.transferTaxBps === 0 ? '✅ No Tax' : `⚠️ ${tokenAnalysis.transferTaxBps / 100}% Tax`}\n`;
+      if (tokenAnalysis.transferTaxBps > 0) {
+        report += `• ${tokenAnalysis.transferTaxBps / 100}% tax on each transaction\n`;
+        report += '• Reduces profitability and increases slippage\n';
+        report += '• May indicate "tax farming" token model\n\n';
+      } else {
+        report += '• No tax on buys or sells\n';
+        report += '• Transfers are not charged extra fees\n\n';
+      }
+      
+      // Holder Distribution Risk
+      report += `*Holder Distribution:*\n`;
+      report += `• Total Holders: ${tokenAnalysis.holderCount || 'Unknown'}\n`;
+      if (tokenAnalysis.topHolderPercentage) {
+        const topHolderRisk = tokenAnalysis.topHolderPercentage > 50 ? '⚠️ High Concentration' : 
+                             tokenAnalysis.topHolderPercentage > 20 ? '⚠️ Moderate Concentration' : 
+                             '✅ Well Distributed';
+        report += `• Top Holder: ${tokenAnalysis.topHolderPercentage.toFixed(1)}% (${topHolderRisk})\n`;
+      }
+      if (tokenAnalysis.top10Percentage) {
+        report += `• Top 10 Holders: ${tokenAnalysis.top10Percentage.toFixed(1)}%\n\n`;
+      } else {
+        report += '\n';
+      }
+      
+      // Trading recommendation
+      report += `*RECOMMENDATION:*\n`;
+      if (tokenAnalysis.potentialRisk >= 80) {
+        report += '❌ DO NOT TRADE. Critical security risks detected.';
+      } else if (tokenAnalysis.potentialRisk >= 50) {
+        report += '⚠️ HIGH RISK. Only trade with funds you can afford to lose.';
+      } else if (tokenAnalysis.potentialRisk >= 20) {
+        report += '🟡 MODERATE RISK. Use caution and set tight stop losses.';
+      } else {
+        report += '✅ LOWER RISK. Still use caution and proper position sizing.';
+      }
+      
+      // Create keyboard for actions
+      const actionsKeyboard = {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: 'Back to Analysis', callback_data: `analyze_token_${tokenAddress}` }
+            ],
+            [
+              { text: 'View on Solscan', url: `https://solscan.io/token/${tokenAddress}` }
+            ],
+            [
+              { text: '« Back to Token Analysis', callback_data: 'token_analysis' }
+            ]
+          ]
+        }
+      };
+      
+      return ctx.editMessageText(report, {
+        parse_mode: 'Markdown',
+        disable_web_preview: true,
+        ...actionsKeyboard
+      });
+    } catch (error) {
+      logger.error(`Error generating detailed risk report: ${error.message}`);
+      return ctx.editMessageText(
+        `❌ Error generating detailed risk report: ${error.message}`,
+        keyboards.tokenAnalysisKeyboard
+      );
+    }
+  } catch (error) {
+    logger.error(`Error in handleTokenRiskDetail: ${error.message}`);
+    return ctx.reply('❌ Error displaying detailed risk analysis. Please try again later.');
+  }
+};
+
 // Command handlers
 module.exports = {
   /**
@@ -2502,5 +3004,11 @@ module.exports = {
   handleViewStrategies,
   handleManageStrategy,
   handleToggleStrategy,
-  handleDeleteStrategy
+  handleDeleteStrategy,
+  handleTokenAnalysis,
+  handleAnalyzeToken,
+  processTokenAddress,
+  handleRecentAnalyses,
+  handleRiskSettings,
+  handleTokenRiskDetail
 };

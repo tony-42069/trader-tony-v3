@@ -23,6 +23,9 @@ const mainKeyboard = {
       ],
       [
         { text: '🤖 AutoTrader', callback_data: 'autotrader' },
+        { text: '🔍 Token Analysis', callback_data: 'token_analysis' }
+      ],
+      [
         { text: '🔄 Refresh', callback_data: 'refresh' }
       ]
     ]
@@ -235,6 +238,26 @@ const autoTraderKeyboard = {
   }
 };
 
+// Token Analysis keyboard
+const tokenAnalysisKeyboard = {
+  reply_markup: {
+    inline_keyboard: [
+      [
+        { text: '🔍 Analyze Token', callback_data: 'analyze_token' }
+      ],
+      [
+        { text: '📖 Recent Analyses', callback_data: 'recent_analyses' }
+      ],
+      [
+        { text: '⚠️ Risk Settings', callback_data: 'risk_settings' }
+      ],
+      [
+        { text: '« Back to Main Menu', callback_data: 'refresh' }
+      ]
+    ]
+  }
+};
+
 module.exports = {
   mainKeyboard,
   slippageKeyboard,
@@ -247,5 +270,6 @@ module.exports = {
   backToMainKeyboard,
   phantomDepositKeyboard,
   phantomWithdrawKeyboard,
-  autoTraderKeyboard
+  autoTraderKeyboard,
+  tokenAnalysisKeyboard
 };

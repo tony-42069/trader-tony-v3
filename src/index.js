@@ -203,6 +203,22 @@ bot.action('stop_autotrader', commands.handleToggleAutoTrader);
 bot.action('view_strategies', commands.handleViewStrategies);
 bot.action('add_strategy', commands.handleAddStrategy);
 
+// Token Analysis menu buttons
+bot.action('token_analysis', commands.handleTokenAnalysis);
+bot.action('analyze_token', commands.handleAnalyzeToken);
+bot.action('recent_analyses', commands.handleRecentAnalyses);
+bot.action('risk_settings', commands.handleRiskSettings);
+bot.action(/token_risk_(.+)/, commands.handleTokenRiskDetail);
+bot.action(/view_analysis_(.+)/, (ctx) => {
+  const tokenAddress = ctx.match[1];
+  return commands.processTokenAddress(ctx, tokenAddress);
+});
+bot.action(/buy_analyzed_(.+)/, (ctx) => {
+  const tokenAddress = ctx.match[1];
+  // Forward to buy handler with the token address
+  return commands.handleBuyWithAddress ? commands.handleBuyWithAddress(ctx, tokenAddress) : ctx.reply('Buy functionality not implemented for analyzed tokens yet.');
+});
+
 // Token check actions
 bot.action(/check_token_(.+)/, async (ctx) => {
   try {
@@ -341,6 +357,11 @@ bot.on(message('text'), async (ctx) => {
   
   // Handle the current user state if available
   if (ctx.session.state) {
+    // Handle waiting for a token address for analyzing
+    if (ctx.session.state === 'waiting_for_token_address') {
+      return commands.processTokenAddress(ctx, text);
+    }
+    
     // Handle waiting for a token address for monitoring
     if (ctx.session.state === 'WAITING_FOR_MONITOR_TOKEN') {
       ctx.session.state = null; // Reset state
@@ -439,6 +460,21 @@ bot.catch((err, ctx) => {
   ctx.reply('❌ An error occurred while processing your request. Please try again later.\n\nIf this persists, use /start to reset the bot.');
 });
 
+// Command to analyze tokens
+bot.command('analyze', async (ctx) => {
+  // Extract token address from command arguments (if provided)
+  const args = ctx.message.text.split(' ');
+  
+  if (args.length > 1) {
+    // If token address was provided directly with the command, process it
+    const tokenAddress = args[1].trim();
+    return commands.processTokenAddress(ctx, tokenAddress);
+  } else {
+    // Otherwise show the token analysis menu
+    return commands.handleAnalyzeToken(ctx);
+  }
+});
+
 // Register bot commands with Telegram to make them appear in the menu
 async function registerBotCommands() {
   try {
@@ -452,6 +488,7 @@ async function registerBotCommands() {
       { command: 'wallet', description: 'View wallet information' },
       { command: 'positions', description: 'View your open positions' },
       { command: 'monitor', description: 'Monitor token prices' },
+      { command: 'analyze', description: 'Analyze token for safety and risks' },
       { command: 'autotrader', description: 'Manage automated trading strategies' },
       { command: 'addstrategy', description: 'Create a new trading strategy' },
       { command: 'refresh', description: 'Update wallet balance' }
@@ -620,85 +657,33 @@ const startBot = async () => {
               
               `⏰ *Age:* ${tokenData.createdAgo}\n` +
               `💰 *Initial Liquidity:* ${tokenData.liquidity}\n` +
-              `👥 *Holders:* ${tokenData.holders}\n` +
-              `🔄 *Transactions:* ${tokenData.txCount}\n` +
-              `💸 *Initial Price:* $${tokenData.initialPrice}\n\n` +
+              `*Holders:* ${tokenData.holders}\n` +
+              `*Transactions:* ${tokenData.txCount}\n` +
+              `*Initial Price:* $${tokenData.initialPrice}\n\n` +
               
-              `📊 *Analysis:*\n` +
-              `- Memecoin Score: ${tokenData.memeScore}%\n` +
-              `- Risk Level: ${tokenData.riskLevel}%\n` +
-              `- Potential Return: ${tokenData.potentialReturn}\n` +
-              `- Confidence: ${tokenData.confidence}%\n\n` +
-              
-              `🤖 *AutoTrader:* Evaluating for strategy "${tokenData.strategy.name}"\n` +
-              `⚡ *Action:* Will attempt to execute trade according to strategy parameters`,
-              { 
-                parse_mode: 'Markdown',
-                reply_markup: {
-                  inline_keyboard: [
-                    [
-                      { text: '👁️ Check Token', callback_data: `check_token_${tokenData.tokenAddress}` },
-                      { text: '📈 View Chart', url: `https://dexscreener.com/solana/${tokenData.tokenAddress}` }
-                    ],
-                    [
-                      { text: '✅ Buy Now', callback_data: `force_buy_${tokenData.tokenAddress}_0.1_5` },
-                      { text: '🚫 Ignore', callback_data: 'ignore_token' }
-                    ]
-                  ]
-                }
-              }
+              `📈 *Memecoin Score:* ${tokenData.memeScore}%\n` +
+              `📉 *Risk Level:* ${tokenData.riskLevel}%\n` +
+              `💸 *Potential Return:* ${tokenData.potentialReturn}\n` +
+              `🤖 *AutoTrader Confidence:* ${tokenData.confidence}%`,
+              { parse_mode: 'Markdown' }
             );
           } catch (notifyError) {
             logger.error(`Failed to notify admin ${adminId}: ${notifyError.message}`);
           }
         }
       });
-      
-      tradingComponents.autoTrader.on('strategyUpdated', (strategy) => {
-        logger.info(`Strategy ${strategy.id} was updated`);
-      });
-      
-      // Register price monitoring for auto-trader tokens
-      setInterval(async () => {
-        try {
-          // Check if autoTrader is available and running
-          if (tradingComponents.autoTrader && tradingComponents.autoTrader.running) {
-            // Use managePositions to check and update positions
-            await tradingComponents.autoTrader.managePositions();
-          }
-        } catch (error) {
-          logger.error(`Error in auto trading monitoring: ${error.message}`);
-        }
-      }, MONITORING_UPDATE_INTERVAL);
     }
     
-    // Launch the bot with improved configuration
-    await bot.launch({
-      dropPendingUpdates: true,
-      allowedUpdates: ['message', 'callback_query']
-    });
+    // Start the bot
+    await bot.launch();
     
-    logger.info('TraderTony v3 bot started successfully');
-    console.log('🚀 TraderTony v3 bot is running with REAL functionality...');
-    console.log(`🔌 Demo mode: ${solanaClient.demoMode ? 'Enabled' : 'Disabled'}`);
-    console.log(`💼 Wallet: ${solanaClient.getWalletAddress()}`);
-    
-    // Enable graceful stop
-    process.once('SIGINT', () => {
-      logger.info('Received SIGINT signal, stopping bot...');
-      bot.stop('SIGINT');
-    });
-    
-    process.once('SIGTERM', () => {
-      logger.info('Received SIGTERM signal, stopping bot...');
-      bot.stop('SIGTERM');
-    });
+    // Enable graceful shutdown
+    process.once('SIGINT', () => bot.stop('SIGINT'));
+    process.once('SIGTERM', () => bot.stop('SIGTERM'));
   } catch (error) {
-    logger.error(`Failed to start bot: ${error.message}`);
-    logger.error(`Error stack: ${error.stack}`);
-    console.error('❌ Failed to start bot:', error.message);
+    logger.error(`Error starting bot: ${error.message}`);
+    process.exit(1);
   }
 };
 
-// BOOTSTRAP: Start the bot with enhanced error handling
 startBot();
