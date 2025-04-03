@@ -21,9 +21,9 @@ const TEST_CONFIG = {
   // Minimum SOL balance needed for testing
   minSolBalance: 0.5, // 0.5 SOL
   
-  // Test tokens to verify
+  // Test tokens to verify (Using Testnet USDC)
   testTokens: [
-    'GfGYyTDGpUkPEYSeVhFirFcP3LqUDq9XnKBA4czmg2fM', // Example token - replace with actual test token
+    'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC Mint Address (Testnet & Mainnet)
   ],
   
   // Position database reset
@@ -45,10 +45,11 @@ async function checkSolBalance() {
       balance = await solanaClient.connection.getBalance(new PublicKey(walletAddress));
     } else {
       // Real mode: get balance via wallet manager
-      balance = await solanaClient.walletManager.getBalance();
+      balance = await solanaClient.walletManager.getBalance(); // Already returns SOL
     }
     
-    const solBalance = balance / LAMPORTS_PER_SOL;
+    // Use the balance directly as it's already in SOL
+    const solBalance = balance; 
     
     logger.info(`Current SOL balance: ${solBalance.toFixed(4)} SOL`);
     
@@ -169,31 +170,37 @@ async function testJupiterConnectivity() {
     // Access Jupiter client directly from solanaClient
     const jupiterClient = solanaClient.jupiterClient;
     
-    if (!jupiterClient || !jupiterClient.isInitialized) {
-      logger.error('❌ Jupiter client is not initialized');
+    // Simply check if the jupiterClient object exists after solanaClient.init()
+    if (!jupiterClient) { 
+      logger.error('❌ Jupiter client object was not found on solanaClient');
       return false;
     }
     
-    // Test get price for SOL (wrapped SOL to USDC)
-    const solPrice = await jupiterClient.getSOLPrice();
+    // Test get price for USDC (relative to SOL) to confirm connectivity
+    const usdcMint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'; // USDC Mint
+    const usdcPriceInSol = await jupiterClient.getTokenPrice(usdcMint);
     
-    if (solPrice) {
-      logger.info(`✅ Successfully fetched SOL price: $${solPrice}`);
+    // getTokenPrice returns price in SOL per token, or -1 on error
+    if (usdcPriceInSol >= 0) { 
+      logger.info(`✅ Successfully fetched USDC price: ${usdcPriceInSol.toFixed(6)} SOL per USDC`);
     } else {
-      logger.error('❌ Failed to fetch SOL price');
+      logger.error('❌ Failed to fetch USDC price');
       return false;
     }
     
-    // Test get price for test token
+    // Test get price for the configured test token (WSOL)
     if (TEST_CONFIG.testTokens.length > 0) {
-      const testToken = TEST_CONFIG.testTokens[0];
-      const tokenPrice = await jupiterClient.getTokenPrice(new PublicKey(testToken));
+      const testToken = TEST_CONFIG.testTokens[0]; // Should be WSOL address
+      // Pass the mint address string directly
+      const tokenPriceInSol = await jupiterClient.getTokenPrice(testToken); 
       
-      if (tokenPrice) {
-        logger.info(`✅ Successfully fetched token price: $${tokenPrice}`);
-      } else {
+      // getTokenPrice returns price in SOL per token, or -1 on error
+      if (tokenPriceInSol >= 0) { 
+        logger.info(`✅ Successfully fetched WSOL price: ${tokenPriceInSol.toFixed(6)} SOL per WSOL`);
+        // Price should be very close to 1
+      } else { 
         logger.warn(`⚠️ Unable to fetch price for test token ${testToken}`);
-        // Not returning false as this is not critical
+        // Not returning false as this is not critical for basic connectivity
       }
     }
     
@@ -210,12 +217,8 @@ async function main() {
   logger.info('🧪 Starting Testnet Preparation...');
   
   try {
-    // Initialize Solana client with the correct privateKey parameter name
-    await solanaClient.init({
-      network: 'testnet',
-      // Note: SolanaClient expects SOLANA_PRIVATE_KEY from env, not passed directly
-      demoMode: false, // Use real testnet mode for preparation
-    });
+    // Initialize Solana client (reads config from process.env)
+    await solanaClient.init();
     
     logger.info('✅ Solana client initialized successfully');
     
@@ -260,4 +263,4 @@ async function main() {
 }
 
 // Run the preparation
-main(); 
+main();

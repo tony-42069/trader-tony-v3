@@ -223,33 +223,118 @@ class JupiterClient {
   /**
    * Get token price relative to SOL
    * @param {string} tokenMint - Token mint address
-   * @returns {Promise<number>} Price in SOL per token
+   * @returns {Promise<number>} Price in SOL per token, or -1 on error
    */
   async getTokenPrice(tokenMint) {
+    // Handle SOL/WSOL case directly
+    if (tokenMint === this.SOL_MINT) {
+        logger.debug(`Price for ${tokenMint}: 1 SOL per token (WSOL)`);
+        return 1.0;
+    }
+      
     try {
-      // Use a small amount for price quote to minimize price impact
-      const smallAmount = 0.01; // 0.01 SOL
-      
-      const quoteResult = await this.getQuote('SOL', tokenMint, smallAmount);
-      
-      if (!quoteResult.success) {
-        throw new Error(`Failed to get price: ${quoteResult.error}`);
+      // --- Try Token -> SOL quote FIRST for potentially better accuracy ---
+      logger.debug(`Attempting reverse quote first: ${tokenMint} -> SOL`);
+      let inputDecimalsForReverse = 9; // Default, fetch if possible
+      try {
+          const tokenInfo = await this.connection.getParsedAccountInfo(new PublicKey(tokenMint));
+          if (tokenInfo?.value?.data?.parsed?.info?.decimals !== undefined) {
+              inputDecimalsForReverse = tokenInfo.value.data.parsed.info.decimals;
+          } else {
+               logger.warn(`Could not fetch decimals for ${tokenMint}, assuming 9.`);
+          }
+      } catch (decError) {
+          logger.warn(`Error fetching decimals for ${tokenMint}: ${decError.message}, assuming 9.`);
       }
+
+      // Quote for 1 unit of the token
+      const reverseQuoteResult = await this.getQuote(tokenMint, 'SOL', 1, { inputDecimals: inputDecimalsForReverse }); 
       
-      // Calculate price: outAmount tokens per smallAmount SOL
-      // Price = SOL per token = smallAmount / outTokens
-      const outTokens = parseFloat(quoteResult.outAmount);
+      if (reverseQuoteResult.success) {
+        // Price = SOL per token = outAmount SOL / 1 token
+        // outAmount is in lamports, convert to SOL
+        const price = parseFloat(reverseQuoteResult.outAmount) / LAMPORTS_PER_SOL; 
+        logger.debug(`Price for ${tokenMint} (from reverse quote): ${price} SOL per token`);
+        // Ensure price is not negative or NaN before returning
+        if (!isNaN(price) && price >= 0) {
+            return price;
+        } else {
+            logger.warn(`Reverse quote resulted in invalid price (${price}), attempting forward quote.`);
+        }
+      } else {
+         logger.debug(`Reverse quote ${tokenMint} -> SOL failed: ${reverseQuoteResult.error}. Attempting forward quote.`);
+      }
+      // --- End Reverse Quote Attempt ---
+
+      // --- Fallback to SOL -> Token quote ---
+      logger.debug(`Attempting forward quote: SOL -> ${tokenMint}`);
+      const smallAmount = 0.01; // 0.01 SOL
+      const quoteResult = await this.getQuote('SOL', tokenMint, smallAmount);
+
+      if (!quoteResult.success) {
+         // If both directions fail
+         throw new Error(`Failed to get price from both directions. Reverse Error: ${reverseQuoteResult.error || 'N/A'}. Forward Error: ${quoteResult.error}`);
+      }
+
+      // Calculate price from SOL -> Token quote (This is now the fallback)
+      // Price = SOL per token = smallAmount SOL / outTokens (in standard unit)
+      
+      // --- Robust Decimal Fetching (for forward quote) ---
+      let outputDecimals = null;
+      try {
+          // Prioritize fetching decimals directly from the mint account info
+          const tokenInfo = await this.connection.getParsedAccountInfo(new PublicKey(tokenMint));
+          if (tokenInfo?.value?.data?.parsed?.info?.decimals !== undefined) {
+              outputDecimals = tokenInfo.value.data.parsed.info.decimals;
+              logger.debug(`Using decimals ${outputDecimals} from chain for ${tokenMint}`);
+          } else {
+              // Fallback: Try to infer from quote response (less reliable)
+              const routePlan = quoteResult.routePlan || [];
+              const lastMarketInfo = routePlan[routePlan.length - 1]?.marketInfos?.[routePlan[routePlan.length - 1].marketInfos.length - 1];
+               if (lastMarketInfo?.outputMint === tokenMint && lastMarketInfo?.lpMint?.decimals !== undefined) {
+                   outputDecimals = lastMarketInfo.lpMint.decimals;
+                   logger.debug(`Using decimals ${outputDecimals} from quote response for ${tokenMint}`);
+               } else {
+                    logger.warn(`Could not determine decimals for ${tokenMint}, assuming 9.`);
+                    outputDecimals = 9; // Assume 9 if all else fails
+               }
+          }
+      } catch (decError) {
+          logger.warn(`Error fetching decimals for ${tokenMint}: ${decError.message}, assuming 9.`);
+          outputDecimals = 9; // Assume 9 on error
+      }
+      // --- End Decimal Fetching ---
+
+      const outTokensInSmallestUnit = parseFloat(quoteResult.outAmount);
+      // Ensure we don't divide by zero if decimals somehow end up null/undefined
+      const divisor = (outputDecimals !== null && outputDecimals >= 0) ? (10 ** outputDecimals) : 1;
+      const outTokens = outTokensInSmallestUnit / divisor; // Convert to standard unit
+
+      if (outTokens === 0) {
+         logger.error(`Forward quote resulted in zero output tokens for ${tokenMint}. Cannot calculate price.`);
+         // Do NOT attempt reverse quote here, as it was already tried or failed.
+         return -1; // Indicate error
+      }
+
       const price = smallAmount / outTokens;
-      
-      logger.debug(`Price for ${tokenMint}: ${price} SOL per token`);
-      
-      return price;
+
+      logger.debug(`Price for ${tokenMint} (from forward quote): ${price} SOL per token`);
+
+      // Ensure price is not negative or NaN before returning
+      if (!isNaN(price) && price >= 0) {
+          return price;
+      } else {
+          logger.error(`Forward quote resulted in invalid price (${price}) for ${tokenMint}.`);
+          return -1; // Indicate error
+      }
+
     } catch (error) {
-      logger.error(`Error getting token price: ${error.message}`);
+      // Log the specific error encountered during the process
+      logger.error(`Error getting token price for ${tokenMint}: ${error.message}`);
       // Return a negative value to indicate error
       return -1;
     }
   }
 }
 
-module.exports = JupiterClient; 
+module.exports = JupiterClient;
