@@ -1918,10 +1918,12 @@ class AutoTrader extends EventEmitter {
       
       return enhancedResult;
     } catch (error) {
-      logger.error(`Error executing buy: ${error.message}`);
+      // Log the original error message passed up from executeSwap/getQuote
+      logger.error(`Error executing buy: ${error.message}`, error); // Log the full error object too
       return {
         success: false,
-        error: error.message
+        // Return the original error message for better context
+        error: `Buy failed: ${error.message}` 
       };
     }
   }
@@ -2120,4 +2122,4 @@ class AutoTrader extends EventEmitter {
   }
 }
 
-module.exports = AutoTrader; 
+module.exports = AutoTrader;

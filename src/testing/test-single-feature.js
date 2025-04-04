@@ -11,6 +11,10 @@
  * node src/testing/test-single-feature.js scaleIn
  */
 
+// Force reload of modules to attempt to bypass caching issues
+Object.keys(require.cache).forEach(key => delete require.cache[key]);
+console.log("--- Cleared Node.js module cache ---"); // Add log to confirm execution
+
 require('dotenv').config();
 const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const fs = require('fs');
@@ -22,7 +26,7 @@ const AutoTrader = require('../trading/auto-trader');
 // Default test configuration
 const TEST_CONFIG = {
   // Test tokens (use testnet tokens)
-  testTokenAddress: 'GfGYyTDGpUkPEYSeVhFirFcP3LqUDq9XnKBA4czmg2fM', // Replace with your test token for testnet
+  testTokenAddress: 'BRwUd4UdV9a9q3tW1F8KPw6s7p9VuWN3LFmQ7RqPHUgu', // Using suggested Testnet USDC
   
   // Position sizes for tests
   testPositionSizeSOL: 0.05, // Small test amount (0.05 SOL)
@@ -70,10 +74,15 @@ async function createTestPosition(featureType) {
     if (solanaClient.tokenSniper && solanaClient.tokenSniper.autoTrader) {
       autoTrader = solanaClient.tokenSniper.autoTrader;
     } else {
-      autoTrader = new AutoTrader(solanaClient.connection, solanaClient.walletManager, positionManager);
-      if (solanaClient.jupiterClient) {
-        autoTrader.setJupiterClient(solanaClient.jupiterClient);
-      }
+      // Instantiate AutoTrader, passing all required components from solanaClient
+      autoTrader = new AutoTrader(
+        solanaClient.connection, 
+        solanaClient.walletManager, 
+        solanaClient.tokenSniper,     // Pass tokenSniper
+        positionManager, 
+        solanaClient.riskAnalyzer,    // Pass riskAnalyzer
+        solanaClient.jupiterClient    // Pass jupiterClient
+      );
     }
     
     // Create position with appropriate settings for this feature test
@@ -172,10 +181,36 @@ async function createTestPosition(featureType) {
       }
     };
     
-    // Execute the buy (reduced amount for testing)
+    // Fetch current price for the test token
+    // --- DIRECT FIX START ---
+    let currentPrice;
+    const wsolAddress = "So11111111111111111111111111111111111111112";
+    if (TEST_CONFIG.testTokenAddress === wsolAddress) {
+      logger.info("[TEST SCRIPT] Test token is WSOL, using fixed price of 1.0");
+      currentPrice = 1.0;
+    } else {
+      logger.info(`[TEST SCRIPT] Test token is not WSOL (${TEST_CONFIG.testTokenAddress}), calling getTokenPrice...`);
+      currentPrice = await solanaClient.jupiterClient.getTokenPrice(TEST_CONFIG.testTokenAddress);
+    }
+    // --- DIRECT FIX END ---
+    if (currentPrice <= 0) { // Check for <= 0 for robustness
+        throw new Error(`Failed to fetch price for test token ${TEST_CONFIG.testTokenAddress} (Price: ${currentPrice})`);
+    }
+    
+    // Construct the required tokenMetadata object
+    const tokenMetadata = {
+        address: opportunity.tokenAddress,
+        symbol: opportunity.tokenSymbol, // Include for potential use in addPosition
+        name: opportunity.tokenName,     // Include for potential use in addPosition
+        price: currentPrice              // Add the fetched price
+        // Add other metadata fields if executeBuy or addPosition requires them
+    };
+
+    // Execute the buy with correct arguments: tokenMetadata and strategy
+    // Note: The actual buy amount is determined within executeBuy based on strategy config
     const result = await autoTrader.executeBuy(
-      opportunity,
-      TEST_CONFIG.testPositionSizeSOL * LAMPORTS_PER_SOL // Convert to lamports
+      tokenMetadata, 
+      testStrategy 
     );
     
     if (result.success) {
@@ -293,4 +328,4 @@ async function main() {
 }
 
 // Run the test
-main(); 
+main();

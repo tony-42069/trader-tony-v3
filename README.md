@@ -77,10 +77,10 @@ TraderTony v3 is an advanced Telegram bot for Solana trading with powerful featu
    TELEGRAM_BOT_TOKEN=your_telegram_bot_token
    ADMIN_TELEGRAM_IDS=your_telegram_id
    
-   # Solana Configuration
-   SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
-   # Uncomment and add your private key for transaction signing
-   # SOLANA_PRIVATE_KEY=your_base58_private_key
+   # Solana Configuration (Recommend Testnet for initial setup)
+   SOLANA_RPC_URL=https://api.testnet.solana.com 
+   # Add your private key for transaction signing (required for non-demo mode)
+   SOLANA_PRIVATE_KEY=your_base58_private_key 
    
    # Wallet Configuration
    DEMO_MODE=true
@@ -129,7 +129,8 @@ TraderTony v3 is an advanced Telegram bot for Solana trading with powerful featu
 - ✅ Phantom wallet integration for deposits/withdrawals
 - ✅ Solana Pay and QR code generation
 - ✅ Real wallet connection with transaction signing
-- ✅ 24/7 Autonomous trading with custom strategies
+- ✅ 24/7 Autonomous trading with custom strategies 
+- 🚧 **Currently Undergoing Testnet Validation:** Core trading and position management features (SL/TP, Trailing, Partials, Scale-in) are implemented but require full validation on Testnet. See `DEBUGGING_REPORT.md` for current status.
 
 ## Development
 
@@ -168,4 +169,4 @@ MIT
 
 ## Disclaimer
 
-This software is for educational purposes only. Use at your own risk. Trading cryptocurrencies involves substantial risk and is not suitable for all investors. The autonomous trading feature should be used with caution and appropriate risk management. 
+This software is for educational purposes only. Use at your own risk. Trading cryptocurrencies involves substantial risk and is not suitable for all investors. The autonomous trading feature should be used with caution and appropriate risk management.

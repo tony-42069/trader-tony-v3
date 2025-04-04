@@ -40,7 +40,8 @@ TraderTony v3 is now a functional trading bot with the following capabilities:
 - Monitor tokens with automatic price updates
 - View detailed portfolio information
 
-The bot is operational and can be used for actual trading on the Solana network with proper wallet integration.
+The bot has core functionality implemented, including Jupiter integration and position management logic (SL/TP, Trailing, Partials, Scale-in). 
+**However, it is currently blocked during Testnet validation.** Attempts to execute test trades are failing due to errors getting quotes from Jupiter within the `executeBuy` flow. See `DEBUGGING_REPORT.md` for details.
 
 ## 🚀 SNIPERTONY Feature Implementation Plan
 
@@ -123,27 +124,34 @@ Based on our README, we need to implement these critical features that make our 
 
 ## 📋 Upcoming Development Priorities
 
-### Short-term (THIS WEEK)
-1. **MEV Protection Implementation** (HIGHEST PRIORITY)
+### Short-term (Immediate Focus)
+1.  **Resolve Testnet Execution Errors** (HIGHEST PRIORITY)
+    *   Debug the `Swap execution failed: Failed to get quote: Unknown error` occurring during `autoTrader.executeBuy`.
+    *   Improve error logging in `jupiterClient.getQuote` to identify the root cause of the quote failure.
+2.  **Complete Testnet Validation**
+    *   Successfully run `test-single-feature.js` for all position management features (maxHoldTime, takeProfit, stopLoss, partialProfit, trailingStop, scaleIn).
+    *   Successfully run the comprehensive `testnet-position-tests.js`.
+3.  Enhanced error handling in Phantom Connect transactions (Lower Priority)
+4.  Improved UI with more detailed transaction information (Lower Priority)
+5.  Better price impact warnings before trades (Lower Priority)
+
+### Medium-term (Post-Testnet Validation)
+1. **MEV Protection Implementation** (High Priority after core logic validation)
    - Research Solana MEV protection techniques
-   - Implement private transaction routing
-   - Create transaction timing optimization
-   - Add bundle execution via specialized RPC endpoints
-
-2. Enhanced error handling in Phantom Connect transactions
-3. Improved UI with more detailed transaction information
-4. Better price impact warnings before trades
-5. Enhanced smart contract analysis for risk detection
-
-### Medium-term (Next 2-4 Weeks)
+   - Implement private transaction routing / Jito bundles
+   - Add transaction timing optimization
 1. Complete the remaining Week 1 Sniper features
 2. Implement Week 2 Ultra-Fast Execution Suite features
 3. Limit orders implementation
 4. DCA (Dollar-Cost Averaging) strategy setup
-5. Trailing stop-loss functionality
-6. Web interface in addition to Telegram bot
+5. Custom Gas Optimization & Priority Fees
+6. Enhanced Smart Contract Analysis (Risk Detection)
+7. Implement Week 2 Ultra-Fast Execution Suite features (from original plan)
+8. Limit orders implementation
+9. DCA (Dollar-Cost Averaging) strategy setup
+10. Web interface in addition to Telegram bot
 
-### Long-term (2-3 Months)
+### Long-term (Post-Sniper Features)
 1. Complete all Week 3 Professional Trading Features
 2. AI-powered trade recommendations
 3. Trading signals marketplace
@@ -152,43 +160,9 @@ Based on our README, we need to implement these critical features that make our 
 6. Integration with additional blockchains
 7. Advanced portfolio analytics
 
-## 💰 Monetization Strategy
+## 💰 Monetization Strategy (TBD)
 
-### Tier 1: Free Version
-- Basic trading functionality
-- Limited daily trading volume 
-- Standard risk analysis
-- Public Jupiter routing
-- Basic token sniping (without MEV protection)
-
-### Tier 2: Pro Version ($29.99/month)
-- Unlimited trading volume
-- Advanced risk analysis and smart contract scanning
-- Token sniping with basic MEV protection
-- Auto Take-Profit/Stop-Loss
-- Priority trade execution
-- Custom trading strategies
-- Lower trading fees
-- 24/7 token monitoring
-- Enhanced charting
-
-### Tier 3: Enterprise ($99.99/month)
-- Everything in Pro
-- Advanced MEV protection (priority bundling)
-- Ultra-fast execution suite
-- Anti-rug protection system
-- Multi-DEX monitoring
-- Advanced market making tools
-- White-label option
-- API access
-- Custom strategy development
-- VIP support
-
-### Additional Revenue Streams
-1. **Transaction fees**: 0.1% fee on trades executed through the bot
-2. **Strategy marketplace**: Users can sell successful strategies to others with platform taking 20% commission
-3. **Referral program**: Users get 20% of fees from referred users
-4. **Signal service**: Premium signals for trending tokens before they pump
+The specific monetization model (e.g., transaction fees, profit sharing, subscription tiers, or a hybrid approach) will be determined at a later stage after core functionality is validated and market research is conducted. The focus for now is on building a robust and reliable trading bot.
 
 ## 📅 Daily Improvement Plan
 

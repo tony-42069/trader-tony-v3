@@ -73,10 +73,27 @@ class JupiterClient {
         originalAmount: amount
       };
     } catch (error) {
-      logger.error(`Error getting Jupiter quote: ${error.message}`);
+      // Log more detailed error information
+      let errorDetails = error.message;
+      if (error.response) {
+        // The request was made and the server responded with a status code
+        // that falls out of the range of 2xx
+        errorDetails += ` | Status: ${error.response.status} | Data: ${JSON.stringify(error.response.data)}`;
+      } else if (error.request) {
+        // The request was made but no response was received
+        errorDetails += ' | No response received from Jupiter API';
+      } else {
+        // Something happened in setting up the request that triggered an Error
+        errorDetails += ' | Error setting up request';
+      }
+      // Simplified logging attempt
+      logger.error(`!!! DETAILED getQuote ERROR: ${error.message} !!!`); 
+      // logger.error(`Error getting Jupiter quote: ${errorDetails}`, error); // Original detailed log commented out
+
       return {
         success: false,
-        error: error.message || 'Unknown error fetching Jupiter quote',
+        // Return a more informative error message if possible
+        error: error.response?.data?.message || error.response?.data?.error || error.message || 'Unknown error fetching Jupiter quote',
         inputMint,
         outputMint,
         originalAmount: amount
@@ -100,12 +117,47 @@ class JupiterClient {
       }
       
       logger.info(`Executing swap: ${amount} ${inputMint} -> ${outputMint}`);
+
+      // Resolve 'SOL' string to WSOL address for comparison
+      const resolvedInputMint = (inputMint === 'SOL') ? this.SOL_MINT : inputMint;
+      const resolvedOutputMint = (outputMint === 'SOL') ? this.SOL_MINT : outputMint;
+
+      // Check if input and output mints are the same AFTER resolving 'SOL'
+      if (resolvedInputMint === resolvedOutputMint) {
+          logger.error(`executeSwap cannot proceed: Input mint and output mint are the same (${resolvedInputMint}).`);
+          return {
+              success: false,
+              error: `Input and output tokens cannot be the same: ${resolvedInputMint}`,
+              inputMint: resolvedInputMint, // Use resolved values in error
+              outputMint: resolvedOutputMint
+          };
+      }
       
-      // 1. Get quote from Jupiter
+      // 1. Get quote from Jupiter (using original input/output which might contain 'SOL')
       const quoteResult = await this.getQuote(inputMint, outputMint, amount, options);
       
-      if (!quoteResult.success || !quoteResult.swapTransaction) {
-        throw new Error(`Failed to get quote: ${quoteResult.error || 'Unknown error'}`);
+      // If getting the quote failed, log it and return the failure result directly
+      // This allows the detailed error logged within getQuote to be the primary source
+      if (!quoteResult.success) {
+        logger.error(`executeSwap cannot proceed because getQuote failed: ${quoteResult.error}`);
+        // Return the failure object from getQuote, which now contains more details
+        return { 
+            success: false, 
+            error: `Failed to get quote: ${quoteResult.error}`, // Keep context
+            inputMint: quoteResult.inputMint, 
+            outputMint: quoteResult.outputMint 
+        };
+      }
+
+      // Check specifically for swapTransaction after confirming success
+      if (!quoteResult.swapTransaction) {
+           logger.error(`executeSwap cannot proceed: Quote successful but swapTransaction missing.`);
+           return { 
+               success: false, 
+               error: 'Quote successful but swapTransaction missing from Jupiter response.',
+               inputMint: quoteResult.inputMint, 
+               outputMint: quoteResult.outputMint 
+           };
       }
       
       // 2. Deserialize and prepare transaction for signing
@@ -226,10 +278,18 @@ class JupiterClient {
    * @returns {Promise<number>} Price in SOL per token, or -1 on error
    */
   async getTokenPrice(tokenMint) {
-    // Handle SOL/WSOL case directly
-    if (tokenMint === this.SOL_MINT) {
-        logger.debug(`Price for ${tokenMint}: 1 SOL per token (WSOL)`);
+    // console.log(`--- ENTERING getTokenPrice with tokenMint: "${tokenMint}" ---`); // Remove previous console log
+    
+    // Robust Primary WSOL Check
+    const wsolAddress = "so11111111111111111111111111111111111111112";
+    // Ensure tokenMint is treated as a string for reliable comparison
+    const tokenMintStr = typeof tokenMint === 'string' ? tokenMint : tokenMint?.toString();
+
+    if (tokenMintStr && tokenMintStr.toLowerCase() === wsolAddress) {
+        logger.info(`[getTokenPrice] Direct WSOL detection PASSED - returning fixed price 1.0 for input: ${tokenMintStr}`);
         return 1.0;
+    } else {
+         logger.info(`[getTokenPrice] Direct WSOL detection FAILED for input: "${tokenMintStr}". Proceeding to fetch price via API.`);
     }
       
     try {
@@ -331,7 +391,16 @@ class JupiterClient {
     } catch (error) {
       // Log the specific error encountered during the process
       logger.error(`Error getting token price for ${tokenMint}: ${error.message}`);
-      // Return a negative value to indicate error
+      
+      // Add WSOL fallback check within the catch block
+      const wsolAddressFallback = "so11111111111111111111111111111111111111112";
+      const tokenMintStrFallback = typeof tokenMint === 'string' ? tokenMint : tokenMint?.toString();
+      if (tokenMintStrFallback && tokenMintStrFallback.toLowerCase() === wsolAddressFallback) {
+          logger.warn(`[getTokenPrice] Fallback: Detected WSOL after API failure for "${tokenMintStrFallback}", returning fixed price 1.0`);
+          return 1.0;
+      }
+
+      // Return a negative value to indicate error if not WSOL
       return -1;
     }
   }
